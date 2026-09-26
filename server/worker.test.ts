@@ -23,8 +23,9 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method } })
         developerProtocol: DEVELOPER_PROTOCOL,
         limits: LIMITS,
       });
-    // The wheel opens its round, which the casino names.
+    // The wheel opens its spin's rounds, which the casino names.
     if (path === '/api/rounds') return Response.json({ id: ROUND, status: 'open' });
+    if (path === `/api/rounds/${ROUND}`) return Response.json({ id: ROUND, status: 'open' });
     if (path.startsWith('/api/developer-bets?')) return Response.json({ bets: [], cursor: '', more: false });
     return Response.json({ error: 'Not found' }, { status: 404 });
   });
@@ -57,7 +58,7 @@ test('a wheel that could not reach the casino opens at the next request', async 
   // The pages keep asking, and the one that arrives after the casino is back opens the table.
   const up = await x.table();
   assert.equal(up.status, 200);
-  assert.equal((await body(up)).round, ROUND, 'on the round the casino named');
+  assert.match((await body(up)).spin, /^[0-9a-f]{64}$/, 'on a spin of rounds the casino named');
 });
 
 test('every request that arrives while the wheel is opening shares the one attempt', async t => {

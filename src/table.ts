@@ -1,11 +1,13 @@
 /**
- * The roulette table as one bet. A round's outcome is a uniform integer below 2^64; the wheel's 37 pockets are 37
- * stretches of it. A player's whole layout is one developer bet whose meta names its chips, and the wheel adds up
- * every layout on a spin into one casino bet, whose prizes pay each stretch what the chips on its number pay. Shared
- * by the page and the wheel's server.
+ * The roulette table. A spin lands in one of 37 pockets, each as likely as the others: the wheel's server walks down a
+ * binary tree of them to one, a casino bet per level (`@hookedin/play/sdk/steps`), and the pockets are the tree's
+ * leaves in `ORDER`. A player's whole layout is one developer bet whose meta names its chips. Shared by the page and the
+ * wheel's server.
  */
-const SPACE = 1n << 64n,
-  WIDTH = SPACE / 37n;
+import { concat, keccak256 } from 'ethers';
+import type { Side } from '@hookedin/play/sdk/steps';
+import type { Round } from '@hookedin/play/sdk/developer';
+
 /** The numbers in the order they sit on a European wheel. */
 export const WHEEL = [
   0, 32, 15, 19, 4, 21, 2, 25, 17, 34, 6, 27, 13, 36, 11, 30, 8, 23, 10, 5, 24, 16, 33, 1, 20, 14, 31, 9, 22, 18, 29, 7,
@@ -14,11 +16,8 @@ export const WHEEL = [
 export const RED = new Set([1, 3, 5, 7, 9, 12, 14, 16, 18, 19, 21, 23, 25, 27, 30, 32, 34, 36]);
 export const colour = (n: number) => (n === 0 ? 'green' : RED.has(n) ? 'red' : 'black');
 
-/** The stretches of the outcome space in order: the numbers 1 to 36, equally wide, then zero, which
- * also takes the few outcomes 37 does not divide. Every outcome is a pocket. */
-const ORDER = [...Array.from({ length: 36 }, (_, i) => i + 1), 0];
-/** The pocket the ball lands in. */
-export const pocket = (outcome: bigint) => ORDER[Number(outcome / WIDTH > 36n ? 36n : outcome / WIDTH)]!;
+/** The pockets as the leaves of a spin's walk, in order: the numbers 1 to 36, then zero. */
+export const ORDER = [...Array.from({ length: 36 }, (_, i) => i + 1), 0];
 
 const numbers = (keep: (n: number) => boolean) => ORDER.filter(n => n !== 0 && keep(n));
 /** The numbers a spot on the layout covers: `17`, `red`, `odd`, `low`, `dozen:2`, `column:3`. */
@@ -40,10 +39,6 @@ export function covers(spot: string): number[] {
 export const returns = (spot: string) => 36n / BigInt(covers(spot).length);
 
 export type Chips = Record<string, bigint>;
-export interface WireBet {
-  stake: string;
-  prizes: { rangeStart: string; rangeEnd: string; payout: string }[];
-}
 /** What each number pays a layout in total. */
 export function payouts(chips: Chips) {
   const pays = new Map<number, bigint>();
@@ -51,31 +46,11 @@ export function payouts(chips: Chips) {
     for (const n of covers(spot)) pays.set(n, (pays.get(n) ?? 0n) + amount * returns(spot));
   return pays;
 }
-/** What each stretch of the outcome space pays, in its order, as prizes: neighbouring stretches that pay the same
- * are one prize. */
-function prizesOf(pays: readonly bigint[]): WireBet['prizes'] {
-  const prizes: { rangeStart: bigint; rangeEnd: bigint; payout: bigint }[] = [];
-  pays.forEach((payout, i) => {
-    const rangeStart = BigInt(i) * WIDTH,
-      rangeEnd = i === 36 ? SPACE : rangeStart + WIDTH,
-      last = prizes.at(-1);
-    if (!payout) return;
-    if (last && last.rangeEnd === rangeStart && last.payout === payout) last.rangeEnd = rangeEnd;
-    else prizes.push({ rangeStart, rangeEnd, payout });
-  });
-  return prizes.map(prize => ({
-    rangeStart: String(prize.rangeStart),
-    rangeEnd: String(prize.rangeEnd),
-    payout: String(prize.payout),
-  }));
-}
-/** A layout as one bet: the stake is every chip, and each pocket pays what the chips on it pay. */
-export function bet(chips: Chips): WireBet {
-  const pays = payouts(chips);
-  return {
-    stake: String(Object.values(chips).reduce((sum, amount) => sum + amount, 0n)),
-    prizes: prizesOf(ORDER.map(n => pays.get(n) ?? 0n)),
-  };
+/** What the wheel owes on each pocket, in `ORDER`, to the layouts a spin covers. */
+export function owedOn(layouts: readonly Chips[]): bigint[] {
+  const owed = ORDER.map(() => 0n);
+  for (const chips of layouts) for (const [n, pays] of payouts(chips)) owed[ORDER.indexOf(n)]! += pays;
+  return owed;
 }
 /** Chips as a bet's meta carries them: each spot's amount as a decimal string. */
 export const wireChips = (chips: Chips) =>
@@ -97,12 +72,15 @@ export function layout(wire: unknown, stake: string): Chips | null {
   const total = Object.values(chips).reduce((sum, amount) => sum + amount, 0n);
   return total > 0n && total === BigInt(stake) ? chips : null;
 }
-/** Layouts on one spin as one bet: their chips together, so each pocket pays what they all pay on it. */
-export function together(layouts: readonly Chips[]): WireBet {
-  const all: Chips = {};
-  for (const chips of layouts)
-    for (const [spot, amount] of Object.entries(chips)) all[spot] = (all[spot] ?? 0n) + amount;
-  return bet(all);
+/** A spin's ID, and the group of every bet on it: the hash of its rounds and then its seed hashes, one after another,
+ * as 64 hex digits. It is published before anybody bets, so it fixes where the ball lands. */
+export const spinId = (rounds: readonly string[], seedHashes: readonly string[]) =>
+  keccak256(concat([...rounds, ...seedHashes])).slice(2);
+/** The hash a spin's first step commits to in its meta: the covered bets' hashes, one after another. */
+export const coveredHash = (covered: readonly string[]) => keccak256(concat(covered));
+/** One step of a spin's walk, from the casino's record of its round, as `stepOutcome` takes it: the side the step's
+ * casino bet signed and its chance, or neither for a round the step only revealed, and the round's outcome. */
+export function stepOf(round: Round, outcome = round.outcome!) {
+  const bet = round.casinoBet!;
+  return bet.stake === '0' ? { outcome } : { side: bet.meta.side as Side, chance: bet.chance, outcome };
 }
-/** The group every bet on a spin carries: its round's 64 hex digits, so the casino lists a spin's bets together. */
-export const groupOf = (round: string) => round.slice(2).toLowerCase();

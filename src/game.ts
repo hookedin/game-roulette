@@ -1,17 +1,19 @@
 /**
  * Roulette where everyone at the table shares one spin. The page lays chips on the layout and asks the wallet to place
- * the whole layout as one developer bet in the group of the round the table shows, its meta naming the chips and the
- * hash of the seed the wheel published for the round: its stake goes to the game's developer, who runs the wheel. At
- * the spin the wheel covers every layout with one casino bet of them all against the casino's bankroll, which reveals
- * where the ball lands, and pays each what it wins there. Once the wallet has collected that, it sends the page the
- * settled receipt, and the page works out the number itself from the seed and the secret, checked against the hashes
- * its bet named. The table is for one asset: players with ETH share one wheel, players with test coins another.
+ * the whole layout as one developer bet in the group of the spin the table shows, its meta naming the chips: its stake
+ * goes to the game's developer, who runs the wheel. The spin's ID is the hash of its rounds and of the seeds the
+ * wheel's casino bets on them bring, all fixed before anybody bets. At the spin the wheel walks down a tree of the
+ * pockets, one casino bet of its own per round, and pays each layout what it wins on the pocket the walk reaches. Once
+ * the wallet has collected that, it sends the page the settled receipt, and the page works out the number itself from
+ * the casino's record of each round, read through the wallet and checked against the spin its bet named. The table is
+ * for one asset: players with ETH share one wheel, players with test coins another.
  */
 import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
+import { next, stepOutcome } from '@hookedin/play/sdk/steps';
 import type { GameReceipt } from '@hookedin/play/sdk/sdk';
 import { mountBank } from '@hookedin/play/sdk/bank';
-import { colour, covers, groupOf, layout, payouts, pocket, wireChips } from './table.ts';
+import { ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf, wireChips } from './table.ts';
 import type { Chips } from './table.ts';
 import type { Spin } from '../server/wheel.ts';
 import { mountWheel } from './wheel-view.ts';
@@ -20,18 +22,15 @@ import { mountWheel } from './wheel-view.ts';
 interface Saved {
   id: string;
   stake: string;
-  /** The round it rides, the spin the player put their chips on, and the hash of the seed the wheel published for
-   * it before the bet: together they fix where the ball lands. */
-  round: string;
-  seedHash: string;
+  /** The spin the player put their chips on: its rounds and seeds, fixed before the bet, fix where the ball lands. */
+  spin: string;
   chips: Record<string, string>;
   /** The wallet signed it and its stake is with the developer: it rides its spin, and cannot be taken back. */
   placed?: boolean;
 }
 interface Table {
-  /** The round the table takes bets on, and the hash of the seed the wheel's casino bet on it brings. */
-  round: string | null;
-  seedHash: string | null;
+  /** The spin the table takes bets on. */
+  spin: string | null;
   closesAt: number | null;
   now: number;
   players: number;
@@ -122,7 +121,7 @@ const LAST_CALL_MS = 3000;
     won = null;
     render();
   }
-  /** The chips cannot move while a request is in flight, a bet is on the round, or the wheel is turning. */
+  /** The chips cannot move while a request is in flight, a bet is on the spin, or the wheel is turning. */
   const locked = () => working || spinning || Boolean(saved);
 
   // --- What the player sees ----------------------------------------------------------------
@@ -175,38 +174,62 @@ const LAST_CALL_MS = 3000;
 
   // --- The bet -----------------------------------------------------------------------------
 
-  /** The spin the wheel kept for a round, or null if it kept none: a round it never spun. */
-  async function keptSpin(round: string): Promise<Spin | null> {
-    const response = await fetch(`./api/spins/${round}?asset=${assetId}`);
+  /** The spin the wheel kept, or null if it kept none: a spin it never walked. */
+  async function keptSpin(id: string): Promise<Spin | null> {
+    const response = await fetch(`./api/spins/${id}?asset=${assetId}`);
     if (response.status === 404) return null;
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || 'The wheel is unavailable.');
     return value;
   }
-  /** The ball lands, then the money shows. The number is worked out here from the seed and the secret the wheel kept,
-   * each checked against the hash the bet named before it was placed, so no wheel can show a number its round did not
-   * draw. A bet the wheel's casino bet did not cover is owed its stake back, and its chips stay on the layout. Whatever
-   * happens, the bet is landed once: the wallet's pushed receipt and the page asking for it can both arrive. */
+  /** The number a spin's walk reached, worked out here from the casino's record of each of its rounds, read through the
+   * player's wallet: each round is the one the spin named for its level, before the bet, by its hash and the hash of
+   * its seed, each step goes the way its casino bet signed before the round was revealed, and the first commits to the
+   * bets the walk covers. So no wheel can show a number its rounds did not draw. Null for a spin that does not add up. */
+  async function walked(bet: Saved, spin: Spin) {
+    if (spinId(spin.rounds, spin.seedHashes) !== bet.spin) return null;
+    const steps = [];
+    for (let level = 0, node = { lo: 0, hi: ORDER.length }; node.hi - node.lo > 1; level++) {
+      const id = spin.rounds[level],
+        round = id && (await HookedIn.round(id));
+      if (
+        !round ||
+        round.status !== 'revealed' ||
+        round.casinoBet?.group !== bet.spin ||
+        roundId(round.secret!) !== id.toLowerCase() ||
+        hashOfSeed(round.seed!) !== spin.seedHashes[level]!.toLowerCase() ||
+        (level === 0 && round.casinoBet.meta.covered !== coveredHash(spin.covered))
+      )
+        return null;
+      const step = stepOf(round, String(outcome(round.seed!, round.secret!).value));
+      steps.push(step);
+      node = next(node, step.side ?? 'left', BigInt(step.outcome));
+    }
+    try {
+      return ORDER[stepOutcome(ORDER.length, steps)]!;
+    } catch {
+      return null;
+    }
+  }
+  /** The ball lands, then the money shows. A bet the walk did not cover is owed its stake back, and its chips stay on
+   * the layout. Whatever happens, the bet is landed once: the wallet's pushed receipt and the page asking for it can
+   * both arrive. */
   async function land(receipt: GameReceipt) {
     if (landing || !saved || saved.id !== receipt.id) return;
     landing = true;
     try {
       const bet = saved,
-        spin = await keptSpin(bet.round),
+        spin = await keptSpin(bet.spin),
         payout = BigInt(receipt.payout!),
-        drawn =
-          spin &&
-          roundId(spin.secret).toLowerCase() === bet.round.toLowerCase() &&
-          hashOfSeed(spin.seed).toLowerCase() === String(bet.seedHash).toLowerCase(),
-        number = drawn ? pocket(outcome([], spin.seed, spin.secret).value) : null,
+        number = spin && (await walked(bet, spin)),
         pays = number === null ? null : (payouts(layout(bet.chips, bet.stake) ?? {}).get(number) ?? 0n),
-        covered = Boolean(spin?.accepted && spin.covered.includes(receipt.bet!));
+        covered = Boolean(spin?.covered.includes(receipt.bet!));
       if (covered && pays === null) {
         saved = null;
         persist();
         bank.hold(false);
         message(
-          `The wheel shows a spin that is not the one your bet was fixed on. It paid ${HookedIn.formatAmount(payout, 9)} ${asset}.`,
+          `The wheel shows a spin its rounds at the casino do not bear out. It paid ${HookedIn.formatAmount(payout, 9)} ${asset}.`,
           true,
         );
         return render();
@@ -218,7 +241,7 @@ const LAST_CALL_MS = 3000;
             : '';
       if (!covered)
         return returned(
-          `${spin && !spin.accepted ? 'The bankroll turned this spin down' : 'The wheel did not cover your bet on this spin'}${
+          `The wheel did not cover your bet on this spin${
             pays === null ? '' : `: its chips would have won ${HookedIn.formatAmount(pays, 9)} ${asset} on ${number}`
           }.${short}`,
         );
@@ -249,8 +272,8 @@ const LAST_CALL_MS = 3000;
     );
     render();
   }
-  /** A bet the casino did not take, or one the wheel did not cover because it came too late for its spin or the
-   * bankroll turned the spin down: the chips are the player's again. */
+  /** A bet the casino did not take, or one the wheel did not cover because it came too late for its spin: the chips
+   * are the player's again. */
   function returned(why: string) {
     saved = null;
     persist();
@@ -273,7 +296,7 @@ const LAST_CALL_MS = 3000;
   }
   async function place() {
     const stake = total();
-    if (!table?.round || !table.seedHash) throw new Error('The wheel is not ready. Try again in a moment.');
+    if (!table?.spin) throw new Error('The wheel is not ready. Try again in a moment.');
     const limit = BigInt((await HookedIn.balance()).balance);
     if (stake > limit) {
       const funding = await HookedIn.requestFunds({ amount: stake - limit });
@@ -283,20 +306,19 @@ const LAST_CALL_MS = 3000;
     saved = {
       id: crypto.randomUUID(),
       stake: String(stake),
-      round: table.round,
-      seedHash: table.seedHash,
+      spin: table.spin,
       chips: wireChips(chips),
     };
     persist();
     await ask();
   }
-  /** Ask the wallet to place the saved bet in its round's group: open until its spin is settled and the wallet has
+  /** Ask the wallet to place the saved bet in its spin's group: open until its spin is settled and the wallet has
    * collected what it was paid, when the wallet sends the settled receipt. */
   async function ask() {
-    const { id, stake, round, seedHash, chips } = saved!;
+    const { id, stake, spin, chips } = saved!;
     bank.hold(true);
     try {
-      await settle(await HookedIn.developerBet({ id, stake, group: groupOf(round), meta: { seedHash, chips } }));
+      await settle(await HookedIn.developerBet({ id, stake, group: spin, meta: { chips } }));
     } catch (error) {
       // A bet the wallet signed but has no answer for yet is asked about again; one it never signed is off.
       if (!saved!.placed && !(await HookedIn.balance()).pending) {
@@ -327,11 +349,11 @@ const LAST_CALL_MS = 3000;
     try {
       table = await wheelAPI<Table>('/table');
       skew = table.now - Date.now();
-      // The wallet has yet to answer for the bet: ask again. Once the table has moved on from its round, ask the wallet
+      // The wallet has yet to answer for the bet: ask again. Once the table has moved on from its spin, ask the wallet
       // about it, so it collects the bet at once; the settled receipt arrives by itself, and is here already if it was
       // collected.
       if (saved && !saved.placed && !working && !spinning) await act(ask);
-      else if (saved?.placed && table.round !== saved.round && !spinning && !landing) {
+      else if (saved?.placed && table.spin !== saved.spin && !spinning && !landing) {
         const receipt = await HookedIn.receipt(saved.id);
         if (receipt?.status === 'settled') await settle(receipt);
       }
