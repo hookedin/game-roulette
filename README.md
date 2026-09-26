@@ -13,7 +13,7 @@ This repository is also a GitHub template: the starting point for a game with a 
 3. The wheel spins twenty seconds after the first chip at the table is down.
 4. The ball lands for everyone at once. A number returns 36 for 1, a dozen or a column 3 for 1, and the even-money bets 2 for 1. Zero is the house's: that is the whole 2.7% edge.
 
-There is a wheel for each asset: you join the one for what your wallet plays with, ETH or test coins.
+The wheel plays with ETH. A wallet that practices with test coins watches the table, and bets once it has a funded channel: a developer bet is settled by the wheel at the casino, and practice never reaches the casino.
 
 ## How it works
 
@@ -25,7 +25,7 @@ Every spin is a walk down a binary tree of the 37 pockets, one round of the whee
 - **The casino**: names each round by the hash of a secret, puts each player's stake in the wheel's bank as the bet is placed, records each bet's group and meta, and admits each of the wheel's casino bets against the bankroll like any other, before it reads the round's secret. It reads none of the scheme.
 - **Each player's wallet**: signs the developer bet, sends it to the casino itself, collects what the wheel's signed settlement pays before it sends the page the receipt, and reads the casino's record of a round for the page.
 
-Page and wheel are one Cloudflare Worker ([server/worker.ts](server/worker.ts)): `dist/` is served as static assets and `/api/` is the wheel, a Durable Object per asset, on the same origin. The page names its asset with `?asset=`.
+Page and wheel are one Cloudflare Worker ([server/worker.ts](server/worker.ts)): `dist/` is served as static assets and `/api/` is the wheel, one Durable Object, on the same origin.
 
 ### The flow
 
@@ -44,7 +44,7 @@ After a reload the page finds its saved bet's receipt with `HookedIn.receipt(id)
 | [src/table.ts](src/table.ts)                                       | Pockets, spots, a layout as one bet's chips, what the wheel owes, a spin's ID. Shared by the page and the wheel        |
 | [src/game.ts](src/game.ts), [src/wheel-view.ts](src/wheel-view.ts) | The page and its canvas wheel                                                                                          |
 | [server/wheel.ts](server/wheel.ts)                                 | The developer: the spin, its bets, the clock, the walk it keeps. Everything outside is handed in, so it runs in a test |
-| [server/worker.ts](server/worker.ts)                               | The Worker and the Durable Object that holds an asset's wheel                                                          |
+| [server/worker.ts](server/worker.ts)                               | The Worker and the Durable Object that holds the wheel                                                                 |
 | [test/](test/)                                                     | The table's arithmetic, its walk against the casino's own admission rule, and the wheel against a stub casino          |
 | [server/worker.test.ts](server/worker.test.ts)                     | The Durable Object opening its wheel against a stub casino                                                             |
 | [wrangler.jsonc](wrangler.jsonc)                                   | The Worker: its name and route, the Durable Object, the vars, and the build it runs before every deploy                |
@@ -60,7 +60,7 @@ The casino knows nothing of this scheme: it records each bet's group and meta wh
 - **Nobody can choose the number, and neither knows it alone.** The wheel never sees a secret before its casino bet reveals it, and the casino never sees a seed. The side each step backs is signed in its casino bet before its round is revealed, and whichever side a step names, each half of the pockets is reached as often as its share: a pocket is off its 1 in 37 by less than one outcome in 2^64 per level. A step the bankroll declines, or the bank cannot pay, moves money between the bankroll and the wheel's bank, and each half of the pockets is reached as often as its share all the same. Together the casino and the wheel could know the number in advance, but not change it: a round or a seed other than the ones the spin named shows at once. Knowing it, they could leave winning layouts off the list of bets the walk covers, which a check of the spin shows, and so does the page of every bet left off.
 - **The bets a spin covers are fixed before the ball lands.** The first step's meta commits to the list of bets the walk covers, and that step is placed before any of the spin's rounds is revealed.
 - **Anyone can check a spin**, with nothing but the casino's public API and the spin the wheel keeps:
-  1. `GET /api/spins/:spin?asset=eth` (or `test`) at the wheel gives the spin's rounds, their seed hashes, the bets it covered and its number. The rounds and then the seed hashes, `keccak256` one after another, are the spin's ID.
+  1. `GET /api/spins/:spin` at the wheel gives the spin's rounds, their seed hashes, the bets it covered and its number. The rounds and then the seed hashes, `keccak256` one after another, are the spin's ID.
   2. `GET /api/rounds/:round` at the casino gives, for each round down to the pocket, the seed, the secret, the outcome and the wheel's casino bet with its group and meta, which the developer signed over the seed's hash and the meta's hash. The secret hashes to the round and the seed to its seed hash; the first step's `meta.covered` is the `keccak256` of the covered bets' hashes; `stepOutcome` from `@hookedin/play/sdk/steps` walks the steps, each to the side its casino bet names, or the left for a round only revealed, to the pocket, and `ORDER` names its number. The page does exactly this, through the player's wallet.
   3. `GET /api/developer-bets?game=<key>&status=settled&group=<spin>` at the casino lists the settled bets on the spin, whatever the wheel says, a page at a time (pass `cursor` as `after` while `more` is true), and `status=open` any it has yet to pay. Each settlement pays a covered bet its chips on the number, and every other its stake. A layout on the spin left off the list shows here. `GET /api/games/:key?group=<spin>` lists the players' bets and the wheel's casino bets on the spin together.
 - **A roulette bet is a developer bet: it trusts the wheel's developer to pay.** Its stake is in the developer's bank from the moment it is placed, and it is paid what the wheel settles. The page shows what that falls short of what the wheel's own list says the bet is owed, and what its chips would have won if the list leaves it off; a check of the spin shows the same for every bet. What it is paid is the casino's promise until the wallet collects it: until then it is outside the principal the contract protects, as the [trust model](https://hookedin.com/docs/overview/trust-model/) says.

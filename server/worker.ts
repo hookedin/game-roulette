@@ -29,17 +29,15 @@ export class RouletteWheel implements DurableObject {
   }
   /** One wheel, opened once and shared by every request that arrives meanwhile. A start that failed
    * is not kept: the casino it needs may be there by the next request. */
-  private open(url: URL) {
-    return (this.wheel ??= (async () => {
-      await this.ctx.storage.put('url', url.href);
-      return new Wheel(
+  private open() {
+    return (this.wheel ??= (async () =>
+      new Wheel(
         {
           developer: await createDeveloper({
             casinoURL: this.env.CASINO_URL,
             key: this.env.DEVELOPER_KEY,
             name: this.env.GAME_NAME,
           }),
-          asset: assetOf(url),
           now: () => Date.now(),
           save: state => this.ctx.storage.put('state', state),
           keep: spin => this.ctx.storage.put(`spin:${spin.id}`, spin),
@@ -47,8 +45,7 @@ export class RouletteWheel implements DurableObject {
           wake: at => void this.ctx.storage.setAlarm(at),
         },
         await this.ctx.storage.get<WheelState>('state'),
-      );
-    })().catch(error => {
+      ))().catch(error => {
       this.wheel = null;
       throw error;
     }));
@@ -56,7 +53,7 @@ export class RouletteWheel implements DurableObject {
   async fetch(request: Request) {
     const url = new URL(request.url);
     try {
-      const wheel = await this.open(url);
+      const wheel = await this.open();
       if (url.pathname === '/api/table' && request.method === 'GET') return Response.json(await wheel.view());
       if (url.pathname === '/api/table/placed' && request.method === 'POST') return Response.json(await wheel.placed());
       // Every spin the wheel kept, with its rounds and the bets its walk covered, for anyone to check.
@@ -72,20 +69,14 @@ export class RouletteWheel implements DurableObject {
   }
   /** The wheel spins on time whether or not anybody is asking. */
   async alarm() {
-    await (
-      await (this.wheel ?? this.open(new URL((await this.ctx.storage.get<string>('url'))!)))
-    )
-      .alarm()
-      .catch(() => {});
+    await (await this.open()).alarm().catch(() => {});
   }
 }
-
-const assetOf = (url: URL) => (url.searchParams.get('asset') === 'test' ? 'test' : 'eth');
 
 export default {
   fetch(request: Request, env: Env) {
     if (!new URL(request.url).pathname.startsWith('/api/')) return env.ASSETS.fetch(request);
-    // Players with ETH share one wheel, players with test coins another.
-    return env.WHEEL.get(env.WHEEL.idFromName(assetOf(new URL(request.url)))).fetch(request);
+    // Every player shares the one wheel.
+    return env.WHEEL.get(env.WHEEL.idFromName('wheel')).fetch(request);
   },
 };

@@ -17,7 +17,7 @@
  * keeps the spin for anyone to check. Everything that touches the outside world is handed in, so the same wheel runs
  * in a Worker or a test.
  */
-import type { AssetId, Developer, PublicDeveloperBet, Round } from '@hookedin/play/sdk/developer';
+import type { Developer, PublicDeveloperBet, Round } from '@hookedin/play/sdk/developer';
 import { levels, next, priceSteps, stepBet } from '@hookedin/play/sdk/steps';
 import type { StepNode } from '@hookedin/play/sdk/steps';
 import { ORDER, coveredHash, layout, owedOn, payouts, spinId, stepOf } from '../src/table.ts';
@@ -44,8 +44,6 @@ export interface WheelState {
 }
 export interface Deps {
   developer: Developer;
-  /** What this wheel's table is played with. Every asset has a wheel of its own. */
-  asset: AssetId;
   now(): number;
   save(state: WheelState): void | Promise<void>;
   /** Keep a spin for anyone to check, and read one back by its ID. */
@@ -121,12 +119,12 @@ export class Wheel {
     const next = this.closesAt();
     if (next !== null) this.deps.wake(next);
   }
-  /** Every open developer bet of the game in this wheel's asset, a page at a time, in the order they were placed. */
+  /** Every open developer bet of the game, a page at a time, in the order they were placed. */
   private async openDeveloperBets() {
     const bets: PublicDeveloperBet[] = [];
     for (let after = ''; ;) {
       const page = await this.deps.developer.bets({ status: 'open', after });
-      bets.push(...page.bets.filter(bet => bet.asset === this.deps.asset));
+      bets.push(...page.bets);
       if (!page.more) break;
       after = page.cursor;
     }
@@ -138,7 +136,7 @@ export class Wheel {
    * this wheel at all: it is settled now, from its spin if the wheel kept one, and with its stake back if not. */
   private async look(now: number, always: boolean) {
     if (now - this.table.at < LOOK_MS && !always) return;
-    const { developer, asset } = this.deps;
+    const { developer } = this.deps;
     const known =
       this.state.spin &&
       (await developer.round(this.state.spin.rounds[0]!).catch((error: any) => {
@@ -147,7 +145,7 @@ export class Wheel {
       }));
     if (!known) {
       const rounds: string[] = [];
-      for (let level = 0; level < levels(ORDER.length); level++) rounds.push((await developer.openRound(asset)).id);
+      for (let level = 0; level < levels(ORDER.length); level++) rounds.push((await developer.openRound()).id);
       // The seeds are derived from the developer's key and the rounds, so their hashes are worked out, never stored.
       const seedHashes = await Promise.all(rounds.map(round => developer.seedHash(round)));
       this.state = { spin: { id: spinId(rounds, seedHashes), rounds, seedHashes }, walk: null };
@@ -186,7 +184,7 @@ export class Wheel {
           walk: {
             covered: covered.map(({ bet }) => bet),
             owed: owedOn(covered.map(({ chips }) => chips)).map(String),
-            bankroll: String((await developer.bankroll(this.deps.asset)) / 2n),
+            bankroll: String((await developer.bankroll()) / 2n),
           },
         };
         await this.deps.save(this.state);

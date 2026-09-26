@@ -45,7 +45,7 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method } })
   return {
     calls,
     start: () => void (reachable = true),
-    table: () => wheel.fetch(new Request('https://roulette.test/api/table?asset=test')),
+    table: () => wheel.fetch(new Request('https://roulette.test/api/table')),
   };
 }
 

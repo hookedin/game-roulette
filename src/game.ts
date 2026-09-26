@@ -5,8 +5,8 @@
  * wheel's casino bets on them bring, all fixed before anybody bets. At the spin the wheel walks down a tree of the
  * pockets, one casino bet of its own per round, and pays each layout what it wins on the pocket the walk reaches. Once
  * the wallet has collected that, it sends the page the settled receipt, and the page works out the number itself from
- * the casino's record of each round, read through the wallet and checked against the spin its bet named. The table is
- * for one asset: players with ETH share one wheel, players with test coins another.
+ * the casino's record of each round, read through the wallet and checked against the spin its bet named. The wheel
+ * plays with ETH: a wallet that practices with test coins watches the table, and bets nothing.
  */
 import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
@@ -47,7 +47,8 @@ const LAST_CALL_MS = 3000;
     stakeInput = $<HTMLInputElement>('stake');
   let scope = '',
     asset = 'ETH',
-    assetId = 'eth',
+    /** The wallet practices, and a developer bet is placed with ETH: the table is watched, not bet on. */
+    practice = false,
     ready = false,
     working = false,
     spinning = false,
@@ -68,7 +69,7 @@ const LAST_CALL_MS = 3000;
   const total = () => Object.values(chips).reduce((sum, amount) => sum + amount, 0n);
   const remaining = () => (table?.closesAt ? table.closesAt - (Date.now() + skew) : Infinity);
   async function wheelAPI<T = Table>(path: string, post = false): Promise<T> {
-    const response = await fetch(`./api${path}?asset=${assetId}`, post ? { method: 'POST', body: '{}' } : {});
+    const response = await fetch(`./api${path}`, post ? { method: 'POST', body: '{}' } : {});
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || 'The wheel is unavailable.');
     return value;
@@ -121,8 +122,9 @@ const LAST_CALL_MS = 3000;
     won = null;
     render();
   }
-  /** The chips cannot move while a request is in flight, a bet is on the spin, or the wheel is turning. */
-  const locked = () => working || spinning || Boolean(saved);
+  /** The chips cannot move while a request is in flight, a bet is on the spin, the wheel is turning, or the wallet
+   * practices. */
+  const locked = () => working || spinning || Boolean(saved) || practice;
 
   // --- What the player sees ----------------------------------------------------------------
 
@@ -152,12 +154,21 @@ const LAST_CALL_MS = 3000;
           ? 'NO MORE BETS'
           : 'PLACE YOUR BETS';
     $('clock').textContent = Number.isFinite(left) ? `Spins in ${seconds}s` : 'Spins when the first chip is down';
+    // What is down is ETH, which a practicing wallet would read as test coins: it sees who is at the table.
     $('players').textContent = table?.players
-      ? `${table.players} at the table · ${HookedIn.formatAmount(table.staked)} ${asset} down`
+      ? `${table.players} at the table${practice ? '' : ` · ${HookedIn.formatAmount(table.staked)} ${asset} down`}`
       : 'The table is open.';
     const place = $<HTMLButtonElement>('place');
     place.disabled = !ready || locked() || !total() || left < LAST_CALL_MS;
-    place.textContent = !ready ? 'Connecting wallet…' : spinning ? 'Spinning…' : saved ? 'Bet placed' : 'Place bets ↗';
+    place.textContent = !ready
+      ? 'Connecting wallet…'
+      : practice
+        ? 'Plays with ETH'
+        : spinning
+          ? 'Spinning…'
+          : saved
+            ? 'Bet placed'
+            : 'Place bets ↗';
     $<HTMLButtonElement>('clear').disabled = locked() || !total();
     stakeInput.disabled =
       $<HTMLButtonElement>('bet-up').disabled =
@@ -176,7 +187,7 @@ const LAST_CALL_MS = 3000;
 
   /** The spin the wheel kept, or null if it kept none: a spin it never walked. */
   async function keptSpin(id: string): Promise<Spin | null> {
-    const response = await fetch(`./api/spins/${id}?asset=${assetId}`);
+    const response = await fetch(`./api/spins/${id}`);
     if (response.status === 404) return null;
     const value = await response.json();
     if (!response.ok) throw new Error(value.error || 'The wheel is unavailable.');
@@ -370,7 +381,7 @@ const LAST_CALL_MS = 3000;
         assetLabels: document.querySelectorAll('[data-asset]'),
       });
       asset = startup.asset;
-      assetId = startup.assetId;
+      practice = startup.practice;
       scope = startup.scope;
       bank.update(startup.state);
       saved = JSON.parse(localStorage.getItem(scope) ?? 'null');
@@ -390,7 +401,12 @@ const LAST_CALL_MS = 3000;
           persist();
         }
       }
-      if (!saved) message('Put chips on the layout. Everyone shares the spin.');
+      if (!saved)
+        message(
+          practice
+            ? 'The wheel plays with ETH. Watch the table here, and set up your wallet with ETH to bet.'
+            : 'Put chips on the layout. Everyone shares the spin.',
+        );
     } catch (error: any) {
       message(error.message, true);
     }

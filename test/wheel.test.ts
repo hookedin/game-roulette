@@ -30,7 +30,6 @@ function table(first = 0) {
     return structuredClone({
       id,
       developer: '0x' + 'a'.repeat(40),
-      asset: 'test',
       status: round.casinoBet ? 'revealed' : 'open',
       ...(round.casinoBet
         ? { seed, secret: round.secret, outcome: String(outcome(seed, round.secret).value), casinoBet: round.casinoBet }
@@ -101,7 +100,6 @@ function table(first = 0) {
   } as unknown as Developer;
   const deps = {
     developer,
-    asset: 'test' as const,
     now: () => now,
     save: (s: WheelState) => void saves.push(structuredClone(s)),
     keep: (spin: Spin) => void spins.set(spin.id, structuredClone(spin)),
@@ -118,26 +116,26 @@ function table(first = 0) {
     wakes,
     wheel,
     bank: () => bank,
-    /** A player's wallet places a developer bet in the group of the spin its page named, in its asset, with its chips
-     * in its meta: its stake goes to the developer's bank, and the casino records when. */
+    /** The developer takes everything out of its bank. */
+    empty: () => void (bank = 0n),
+    /** A player's wallet places a developer bet in the group of the spin its page named, with its chips in its meta:
+     * its stake goes to the developer's bank, and the casino records when. */
     bet({
       uname = 'p',
       chips = { red: 100n },
-      asset = 'test',
       spin = wheel.state.spin!.id,
       stake = String(Object.values(chips).reduce((sum, amount) => sum + amount, 0n)),
       meta = { chips: wireChips(chips) },
     }: {
       uname?: string;
       chips?: Chips;
-      asset?: 'eth' | 'test';
       spin?: string;
       stake?: string;
       meta?: Record<string, unknown>;
     } = {}) {
       const hash = '0x' + String(open.size + paid.size + 1).padStart(64, '0');
-      open.set(hash, { bet: hash, uname, stake, meta, asset, group: spin, status: 'open', placedAt: now } as any);
-      if (asset === 'test') bank += BigInt(stake);
+      open.set(hash, { bet: hash, uname, stake, meta, group: spin, status: 'open', placedAt: now } as any);
+      bank += BigInt(stake);
       return hash;
     },
     /** The steps of a kept spin as the casino shows them, and the number they walk to, as a page checks them. */
@@ -186,9 +184,9 @@ test('an empty table waits; the first bet starts the clock; the walk pays every 
   const layouts: Chips[] = [{ red: 250n }, { '17': 50n }],
     a = t.bet({ uname: 'a', chips: layouts[0] }),
     b = t.bet({ uname: 'a', chips: layouts[1] });
-  t.bet({ uname: 'b', asset: 'eth', spin: 'f'.repeat(64) });
+  t.bet({ uname: 'b', spin: 'f'.repeat(64) });
   const placed = await t.wheel.placed();
-  assert.deepEqual([placed.players, placed.staked], [1, '300'], 'only the bets on its own spin, in its own asset');
+  assert.deepEqual([placed.players, placed.staked], [1, '300'], 'only the bets on its own spin');
   assert.equal(placed.closesAt, placedAt + BETTING_MS, 'twenty seconds after the first bet, by the casino');
   assert.equal(t.wakes.at(-1), placed.closesAt, 'and on time whether or not anybody asks');
   t.advance(BETTING_MS - 1);
@@ -298,9 +296,9 @@ test('a step the bankroll declines still reveals its round, and the walk goes on
 test("a step whose stake the developer's bank cannot pay only reveals its round, and the walk goes on", async () => {
   const t = table();
   await t.wheel.view();
-  // A bet whose stake is not in this bank: the table's steps find it short.
-  const a = t.bet({ chips: { '17': 100n }, asset: 'eth', spin: t.wheel.state.spin!.id });
-  t.deps.asset = 'eth' as never;
+  // The developer takes the stake out of its bank, so the table's steps find it short.
+  const a = t.bet({ chips: { '17': 100n } });
+  t.empty();
   await t.spin();
   const kept = [...t.saves].reverse().find(s => s.walk)!,
     spin = (await t.wheel.kept(kept.spin!.id))!,
