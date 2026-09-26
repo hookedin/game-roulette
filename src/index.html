@@ -1,0 +1,87 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>HookedIn Roulette</title>
+    <link rel="icon" type="image/svg+xml" href="./brand/hookedin-mark.svg" />
+    <link rel="stylesheet" href="./shared.css" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header class="game-head">
+        <div>
+          <div class="eyebrow">HOOKEDIN ORIGINALS / 08</div>
+          <div class="game-title">
+            <h1>Roulette</h1>
+            <span class="edition">ONE WHEEL, EVERY PLAYER</span>
+          </div>
+        </div>
+        <div class="head-note"><span class="live-dot"></span><span id="players">The table is open.</span></div>
+      </header>
+      <div id="bank" class="bank" data-state="connecting"></div>
+      <section class="stage" aria-label="Wheel">
+        <div class="stage-meta" id="phase">PLACE YOUR BETS</div>
+        <div class="stage-badge" id="clock">Spins when the first chip is down</div>
+        <div class="scene">
+          <canvas id="wheel" width="520" height="520" aria-hidden="true"></canvas>
+          <div class="landed" id="landed" data-colour="">–</div>
+          <div class="history" id="history" aria-label="Recent numbers"></div>
+        </div>
+      </section>
+      <div class="layout-scroll">
+        <section class="layout" id="layout" aria-label="Betting layout"></section>
+      </div>
+      <section class="controls" aria-label="Bet controls">
+        <div class="field">
+          <label for="stake">Chip</label>
+          <div class="bet-row">
+            <button class="step" id="bet-down" type="button" aria-label="Smaller chip">−</button>
+            <div class="input-wrap">
+              <input id="stake" inputmode="decimal" value="0.000001" autocomplete="off" aria-label="Chip in ETH" /><span
+                data-asset
+                >ETH</span
+              >
+            </div>
+            <button class="step" id="bet-up" type="button" aria-label="Larger chip">+</button>
+          </div>
+        </div>
+        <div class="field">
+          <div class="field-label">On the table</div>
+          <div class="readout"><strong id="total">0</strong><span data-asset>ETH</span></div>
+        </div>
+        <button class="secondary" id="clear" type="button">Clear</button>
+        <button class="primary" id="place" type="button">Connecting wallet…</button>
+      </section>
+      <div class="status" id="status" role="status" aria-live="polite">Connecting to your wallet…</div>
+      <footer class="foot">
+        <div class="foot-note">
+          A sandboxed game by HookedIn Studio.<br />Your funds stay in the independent client.
+        </div>
+        <details class="rules">
+          <summary>How it works</summary>
+          <p>
+            Click a number or an outside bet to put a chip on it; right-click takes one off. All your chips are one bet,
+            which your wallet signs whole: a number returns 36 for 1, a dozen or a column 3 for 1, and red, black, odd,
+            even, low and high 2 for 1. Zero belongs to the house, which is the game's whole 2.7% edge.
+          </p>
+          <p>
+            Everyone at the table shares one spin, and your bet is a developer bet: its stake goes to the game's
+            developer, who runs the wheel, and you trust them to pay. Before anybody bets, the casino names the spin's
+            round, the hash of a secret, and the wheel publishes the hash of its seed; your bet names both, and the
+            casino records them with it, so where the ball lands is fixed before your bet is in, and nobody can change
+            it. Twenty seconds after the first chip at the table is down, the wheel covers every layout on the spin with
+            one casino bet of them all against the casino's bankroll, which reveals the secret and the seed, and pays
+            each covered bet what its chips win there. This page works out the number from the secret and the seed,
+            checks both against the hashes your bet named, and shows any shortfall, or what your chips would have won if
+            the wheel did not cover them; anyone can check every spin against what the casino records. A bet the wheel
+            does not cover, one that comes too late for its spin or a spin the bankroll turns down, gets its stake back.
+            Each asset has its own wheel: you join the one for what your wallet plays with.
+          </p>
+        </details>
+      </footer>
+    </main>
+    <script type="module" src="./game.js" crossorigin="anonymous"></script>
+  </body>
+</html>
