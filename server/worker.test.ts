@@ -3,15 +3,20 @@ import assert from 'node:assert/strict';
 import { Wallet } from 'ethers';
 import { LIMITS, DEVELOPER_PROTOCOL } from '@hookedin/play/sdk/developer';
 import { RouletteWheel } from './worker.ts';
+import { RETRY_MS } from './wheel.ts';
 
 const CASINO = 'https://casino.test',
   ROUND = '0x' + 'd'.repeat(64);
 const body = async (response: Response) => (await response.json()) as any;
 
-/** A casino that can be taken away and put back, and somewhere for the Durable Object to keep its state. */
+/** A casino that can be taken away and put back, somewhere for the Durable Object to keep its state, the alarms it
+ * asks for, and a clock. */
 function worker(t: { mock: { method: typeof import('node:test').mock.method } }) {
-  const calls: string[] = [];
-  let reachable = false;
+  const calls: string[] = [],
+    alarms: number[] = [];
+  let reachable = false,
+    now = 1_000_000;
+  t.mock.method(Date, 'now', () => now);
   t.mock.method(globalThis, 'fetch', async (url: string) => {
     const path = String(url).slice(CASINO.length);
     calls.push(path);
@@ -34,7 +39,7 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method } })
     storage: {
       get: async (key: string) => stored.get(key),
       put: async (key: string, value: unknown) => void stored.set(key, value),
-      setAlarm: async () => {},
+      setAlarm: async (at: number) => void alarms.push(at),
     },
   } as unknown as DurableObjectState;
   const wheel = new RouletteWheel(ctx, {
@@ -44,8 +49,13 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method } })
   } as never);
   return {
     calls,
+    alarms,
     start: () => void (reachable = true),
+    stop: () => void (reachable = false),
+    later: (ms: number) => void (now += ms),
+    now: () => now,
     table: () => wheel.fetch(new Request('https://roulette.test/api/table')),
+    alarm: () => wheel.alarm(),
   };
 }
 
@@ -70,4 +80,22 @@ test('every request that arrives while the wheel is opening shares the one attem
     x.calls.filter(path => path === '/api/config'),
     ['/api/config'],
   );
+});
+
+test('an alarm that cannot reach the casino asks to be woken again, before the wheel opens and after', async t => {
+  const x = worker(t);
+  t.mock.method(console, 'error', () => {});
+  await x.alarm();
+  assert.deepEqual(x.alarms, [x.now() + RETRY_MS], 'the wheel could not open');
+  x.start();
+  assert.equal((await x.table()).status, 200);
+  x.stop();
+  x.later(RETRY_MS);
+  await x.alarm();
+  assert.deepEqual(x.alarms.at(-1), x.now() + RETRY_MS, 'the wheel could not read its bets');
+  // Once the casino answers, a table with nothing on it asks for no alarm.
+  x.start();
+  x.later(RETRY_MS);
+  await x.alarm();
+  assert.equal(x.alarms.length, 2);
 });

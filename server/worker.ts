@@ -4,7 +4,7 @@
  * to nobody but the casino's public API.
  */
 import { createDeveloper } from '@hookedin/play/sdk/developer';
-import { Wheel } from './wheel.ts';
+import { RETRY_MS, Wheel } from './wheel.ts';
 import type { Spin, WheelState } from './wheel.ts';
 
 interface Env {
@@ -67,9 +67,15 @@ export class RouletteWheel implements DurableObject {
       return Response.json({ error: error.message || 'The wheel is unavailable' }, { status: 503 });
     }
   }
-  /** The wheel spins on time whether or not anybody is asking. */
+  /** The wheel spins on time whether or not anybody is asking. An alarm that fails, opening the wheel or reading the
+   * casino, tries again shortly: nothing else wakes a table nobody is watching. */
   async alarm() {
-    await (await this.open()).alarm().catch(() => {});
+    try {
+      await (await this.open()).alarm();
+    } catch (error: any) {
+      console.error('Wheel alarm:', error.message);
+      await this.ctx.storage.setAlarm(Date.now() + RETRY_MS);
+    }
   }
 }
 

@@ -54,8 +54,9 @@ export interface Deps {
 }
 /** How long players have once the first chip is down. */
 export const BETTING_MS = 20_000;
-const RETRY_MS = 5_000,
-  LOOK_MS = 1_000;
+/** How soon a walk or an alarm that failed is tried again. */
+export const RETRY_MS = 5_000;
+const LOOK_MS = 1_000;
 /** What a bet on a spin is owed: what its chips pay on the number if the walk covered it, and its stake back
  * otherwise, as for a bet on a spin the wheel never walked. */
 export function owed(bet: PublicDeveloperBet, spin: Spin | null | undefined) {
