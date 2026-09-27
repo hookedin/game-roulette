@@ -1,6 +1,0 @@
-{
-  "name": "Roulette",
-  "description": "European roulette with one wheel for the whole table: everyone's chips ride the same spin.",
-  "entry": "./index.html",
-  "developer": "0xcD0C778307e7D3Da6D3D23440285050f911840d4"
-}
