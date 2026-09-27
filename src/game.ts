@@ -7,8 +7,7 @@
  * the wallet has collected that, it sends the page the settled receipt, and the page works out the number itself from
  * the casino's record of each round, read through the wallet and checked against the spin its bet named. The wheel
  * turns on its clock whether or not anybody bets, and a turn the player has no bet on lands where the table says: on
- * the number the wheel's walk reached, or, when nobody bet, on the pocket it drew. The wheel plays with ETH: a wallet
- * that practices with play money watches the table, and bets nothing.
+ * the number the wheel's walk reached, or, when nobody bet, on the pocket it drew.
  */
 import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
@@ -62,8 +61,6 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
     unit = 0n,
     /** The chip in hand, as a number of units. */
     hand = 1,
-    /** The wallet practices, and a developer bet is placed with ETH: the table is watched, not bet on. */
-    practice = false,
     ready = false,
     working = false,
     /** The wheel cannot be reached, so there is no spin to bet on. */
@@ -106,13 +103,10 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
       : units >= 1e3
         ? `${+(units / 1e3).toFixed(1)}K`
         : `${+units.toFixed(2)}`;
-  /** The chips cannot move before the wallet answers, while a request is in flight, a bet is on the spin or the wheel
-   * turns, or when the wallet practices. */
-  const locked = () => !ready || practice || working || Boolean(rolling) || spinning || Boolean(saved);
-  const idle = () =>
-    practice
-      ? 'Practice watches this table: the wheel plays with ETH. Switch to ETH to bet.'
-      : `Pick a chip and tap the board. Chip 1 is ${eth(unit)}.`;
+  /** The chips cannot move before the wallet answers, while a request is in flight, or while a bet is on the spin or
+   * the wheel turns. */
+  const locked = () => !ready || working || Boolean(rolling) || spinning || Boolean(saved);
+  const idle = () => `Pick a chip and tap the board. Chip 1 is ${eth(unit)}.`;
   /** The wheel, this page's own server. A reply that cannot be read is the wheel being away. */
   async function wheelAPI<T = Table>(path: string, post = false): Promise<T> {
     const response = await fetch(`./api${path}`, post ? { method: 'POST', body: '{}' } : {}),
@@ -209,19 +203,17 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
       const size = Number(button.dataset.size);
       button.setAttribute('aria-pressed', String(size === hand));
       button.setAttribute('aria-label', unit ? `Chip of ${eth(BigInt(size) * unit)}` : `Chip ${short(size)}`);
-      button.disabled = !ready || practice;
+      button.disabled = !ready;
     }
     $('chip-label').textContent = unit ? `Chip · ${eth(BigInt(hand) * unit)}` : 'Chip';
     $('total').textContent = HookedIn.formatAmount(total(), 9);
     $('phase').textContent = offline
       ? 'Table closed'
-      : practice
-        ? 'Watching'
-        : turning || (late && table?.closesAt)
-          ? 'No more bets'
-          : saved
-            ? 'Your bet is in'
-            : 'Place your bets';
+      : turning || (late && table?.closesAt)
+        ? 'No more bets'
+        : saved
+          ? 'Your bet is in'
+          : 'Place your bets';
     $('clock').textContent = offline
       ? 'Wheel offline'
       : turning
@@ -231,33 +223,30 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
           : !table.spin
             ? 'Next spin opening'
             : `Spins in ${Math.max(0, Math.ceil(left / 1000))}s`;
-    // What is down is ETH, which a practicing wallet would read as play money: it sees who is at the table.
     $('players').textContent = offline
       ? 'The wheel is offline.'
       : !table
         ? 'Connecting to the wheel…'
         : table.players
-          ? `${table.players} ${table.players === 1 ? 'player' : 'players'} on this spin${practice ? '' : ` · ${eth(table.staked)}`}`
+          ? `${table.players} ${table.players === 1 ? 'player' : 'players'} on this spin · ${eth(table.staked)}`
           : 'No bets on this spin yet';
     const place = $<HTMLButtonElement>('place');
     place.disabled = locked() || offline || !table?.spin || !total() || late;
     place.textContent = !ready
       ? 'Connecting wallet…'
-      : practice
-        ? 'Bets need ETH'
-        : offline
-          ? 'Table closed'
-          : working
-            ? 'Placing…'
-            : turning
-              ? 'Spinning…'
-              : saved
-                ? 'Bet placed'
-                : late && table?.closesAt
-                  ? 'No more bets'
-                  : total() && same(chips) === last
-                    ? 'Bet again ↗'
-                    : 'Place bets ↗';
+      : offline
+        ? 'Table closed'
+        : working
+          ? 'Placing…'
+          : turning
+            ? 'Spinning…'
+            : saved
+              ? 'Bet placed'
+              : late && table?.closesAt
+                ? 'No more bets'
+                : total() && same(chips) === last
+                  ? 'Bet again ↗'
+                  : 'Place bets ↗';
     $<HTMLButtonElement>('undo').disabled = locked() || !past.length;
     $<HTMLButtonElement>('clear').disabled = locked() || !total();
     bank.setBusy(working || spinning);
@@ -535,7 +524,6 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
         info = await HookedIn.info(),
         state = await HookedIn.balance();
       asset = hello.asset.symbol;
-      practice = hello.practice;
       unit = BigInt(info.recommendedStake);
       scope = HookedIn.storageScope(info);
       for (const label of document.querySelectorAll('[data-asset]')) label.textContent = asset;
