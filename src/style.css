@@ -1,144 +1,381 @@
-.scene {
-  position: relative;
+/* The table: the wheel beside the board. A phone stands the board up, and shows the wheel over it while it spins. */
+.table {
+  display: grid;
+  grid-template-columns: 236px minmax(0, 1fr);
+  grid-template-areas: 'wheel board' 'wheel history';
+  align-items: center;
+  gap: 14px 28px;
+  padding: 56px 24px 22px;
+}
+.wheel-box {
+  grid-area: wheel;
   display: grid;
   justify-items: center;
-  gap: 14px;
+  gap: 12px;
+}
+.disc {
+  position: relative;
   width: 100%;
-  padding: 40px 16px 24px;
+  aspect-ratio: 1;
 }
 #wheel {
-  width: min(260px, 70vw);
-  height: auto;
-  aspect-ratio: 1;
+  display: block;
+  width: 100%;
+  height: 100%;
 }
 .landed {
   position: absolute;
-  top: calc(40px + min(130px, 35vw) - 34px);
+  inset: 0;
   display: grid;
   place-items: center;
-  width: 68px;
-  height: 68px;
+  width: 34%;
+  height: 34%;
+  margin: auto;
   border-radius: 50%;
-  font-size: 28px;
-  font-weight: 600;
+  font-size: 30px;
+  font-weight: 700;
   letter-spacing: -1px;
+  font-variant-numeric: tabular-nums;
   color: #f4f5f4;
   background: var(--dark);
-  border: 1px solid var(--line);
+  border: 2px solid var(--line);
   transition: background 0.3s;
 }
-.landed[data-colour='red'] {
+.landed[data-colour='red'],
+.spot[data-colour='red'],
+.history li[data-colour='red'] {
   background: #b3261e;
 }
-.landed[data-colour='black'] {
+.landed[data-colour='black'],
+.spot[data-colour='black'],
+.history li[data-colour='black'] {
   background: #0a0d0e;
 }
-.landed[data-colour='green'] {
+.landed[data-colour='green'],
+.spot[data-colour='green'],
+.history li[data-colour='green'] {
   background: #1f7a4a;
 }
+.result {
+  min-height: 22px;
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--muted);
+}
+.result[data-win='true'] {
+  color: var(--accent);
+}
 .history {
+  grid-area: history;
   display: flex;
   gap: 6px;
-  min-height: 24px;
+  min-width: 0;
+  height: 26px;
+  margin: 0;
+  padding: 0;
+  overflow: hidden;
+  list-style: none;
 }
-.history span {
+.history li {
+  flex: none;
+  display: grid;
+  place-items: center;
+  min-width: 26px;
+  height: 26px;
+  padding: 0 6px;
+  border-radius: 13px;
+  font-size: 11px;
+  font-weight: 700;
+  font-variant-numeric: tabular-nums;
+}
+.history li:first-child {
+  box-shadow: 0 0 0 2px var(--accent);
+}
+/* The table's top line: where it stands and the numbers it remembers. */
+.table-top {
+  display: contents;
+}
+/* Each spot names its place twice: lengthwise (--across), and turned to stand up on a phone (--down). */
+.board {
+  grid-area: board;
+  display: grid;
+  grid-template-columns: 42px repeat(12, minmax(0, 1fr)) 42px;
+  grid-template-rows: repeat(3, 46px) repeat(2, 40px);
+  gap: 4px;
+  user-select: none;
+  -webkit-user-select: none;
+}
+.spot {
+  grid-area: var(--across);
+  position: relative;
+  display: grid;
+  place-items: center;
+  min-width: 0;
+  padding: 0;
+  border-radius: 7px;
+  font-size: 13px;
+  font-weight: 600;
+  color: #f4f5f4;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+}
+.spot[data-covered] {
+  border-color: var(--accent);
+}
+@media (hover: hover) {
+  .board[data-locked='false'] .spot:hover {
+    border-color: var(--accent);
+  }
+}
+.spot:focus-visible {
+  z-index: 2;
+  outline-offset: 1px;
+}
+.board[data-locked='true'] .spot {
+  cursor: default;
+}
+.board[data-locked='true'] .spot:not(:has(.chip)) {
+  opacity: 0.55;
+}
+.spot[data-landed] {
+  box-shadow: inset 0 0 0 2px #f4f5f4;
+}
+.spot[data-won='true'] {
+  box-shadow:
+    0 0 0 2px var(--accent),
+    0 0 18px color-mix(in srgb, var(--accent) 45%, transparent);
+}
+.spot .chip {
+  position: absolute;
+  top: -7px;
+  right: -5px;
+  z-index: 1;
   display: grid;
   place-items: center;
   min-width: 24px;
   height: 24px;
-  padding: 0 6px;
+  padding: 0 4px;
   border-radius: 12px;
-  font-size: 11px;
-  font-weight: 600;
-}
-.layout {
-  display: grid;
-  grid-template-columns: 44px repeat(12, minmax(0, 1fr)) 52px;
-  gap: 4px;
-  margin-top: 14px;
-  padding: 14px;
-  border: 1px solid var(--line);
-  border-radius: 18px;
-  background: var(--panel);
-  user-select: none;
-}
-.layout[data-locked='true'] {
-  opacity: 0.6;
+  font-size: 10px;
+  font-weight: 800;
+  color: #14201b;
+  background: var(--accent);
+  border: 2px dashed rgba(20, 32, 27, 0.4);
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.45);
   pointer-events: none;
 }
-.spot {
-  position: relative;
-  display: grid;
-  place-items: center;
-  min-height: 40px;
-  border-radius: 8px;
-  font-size: 13px;
-  font-weight: 600;
-  color: #f4f5f4;
-  background: rgba(255, 255, 255, 0.05);
-  border: 1px solid transparent;
+.spot[data-lost='true'] .chip {
+  opacity: 0.4;
 }
-.spot:hover {
-  border-color: var(--accent);
+/* The rack: casino chips, the one in hand raised. */
+.chips {
+  display: flex;
+  gap: 8px;
+  height: 48px;
+  align-items: center;
 }
-.spot[data-colour='red'],
-.history span[data-colour='red'] {
-  background: #b3261e;
+.chip-pick {
+  width: 42px;
+  height: 42px;
+  padding: 0;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 800;
+  color: #fff;
+  background: var(--chip);
+  border: 3px dashed rgba(255, 255, 255, 0.6);
+  box-shadow: inset 0 0 0 3px rgba(0, 0, 0, 0.18);
+  transition: transform 0.15s;
 }
-.spot[data-colour='black'],
-.history span[data-colour='black'] {
-  background: #0a0d0e;
+.chip-pick[data-size='1'] {
+  --chip: #d9dfdc;
+  color: #14201b;
+  border-color: rgba(20, 32, 27, 0.35);
 }
-.spot[data-colour='green'],
-.history span[data-colour='green'] {
-  background: #1f7a4a;
+.chip-pick[data-size='10'] {
+  --chip: #2f6fde;
 }
-.spot[data-won='true'] {
-  box-shadow: 0 0 0 2px var(--accent);
+.chip-pick[data-size='100'] {
+  --chip: #c9731f;
 }
-.spot .chip {
-  position: absolute;
-  right: -4px;
-  top: -6px;
-  padding: 1px 5px;
-  border-radius: 9px;
-  font-size: 9px;
-  font-weight: 700;
-  color: #101617;
-  background: var(--accent);
+.chip-pick[data-size='1000'] {
+  --chip: #7b4fd6;
 }
-.spot.zero {
-  grid-row: 1 / span 3;
+.chip-pick[aria-pressed='true'] {
+  transform: translateY(-3px);
+  box-shadow:
+    0 0 0 2px var(--dark),
+    0 0 0 4px var(--accent);
 }
-.spot.dozen {
-  grid-column: span 4;
+/* The controls and what they say stay in reach at the foot of the page. */
+.dock {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin: 0 -32px;
+  padding: 0 32px 14px;
+  background: var(--dark);
 }
-.spot.outside {
-  grid-column: span 2;
-}
-.layout .gap {
-  visibility: hidden;
-}
-@media (max-width: 640px) {
-  .layout-scroll {
-    overflow-x: auto;
-    -webkit-overflow-scrolling: touch;
-    margin: 0 -14px;
-    padding: 0 14px;
-  }
-  .layout {
-    grid-template-columns: 44px repeat(12, 44px) 52px;
-    min-width: max-content;
-  }
-  .spot {
-    min-height: 44px;
-  }
+.dock .status {
+  min-height: 0;
+  padding: 0 0 12px;
 }
 .controls {
-  grid-template-columns: minmax(150px, 1.2fr) minmax(120px, 1fr) minmax(90px, 0.6fr) minmax(150px, 1.2fr);
+  grid-template-columns: auto auto auto minmax(150px, 1fr) minmax(170px, 1.2fr);
 }
-@media (max-width: 640px) {
+.total strong {
+  margin-left: auto;
+}
+/* A narrower window stacks the wheel over the board, and the controls in two rows. */
+@media (max-width: 900px) {
+  .table {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'wheel' 'board' 'history';
+  }
+  .wheel-box {
+    justify-self: center;
+    width: 210px;
+  }
   .controls {
-    grid-template-columns: 1fr 1fr;
+    grid-template-columns: auto auto minmax(0, 1fr);
+    grid-template-areas: 'chips chips total' 'undo clear place';
+  }
+  .chip-field {
+    grid-area: chips;
+  }
+  #undo {
+    grid-area: undo;
+  }
+  #clear {
+    grid-area: clear;
+  }
+  .total {
+    grid-area: total;
+  }
+  .controls > .primary:last-child {
+    grid-area: place;
+  }
+}
+@media (max-width: 600px) {
+  .table {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-areas: 'top' 'board';
+    gap: 8px;
+    padding: 0 8px 8px;
+    overflow: visible;
+  }
+  /* The top line stays in sight while the board scrolls under it. It says where the table is until there are numbers
+     to remember, and then remembers them. */
+  .table-top {
+    grid-area: top;
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 -8px;
+    padding: 8px;
+    border-radius: 18px 18px 0 0;
+    background: var(--dark);
+  }
+  .stage-meta {
+    position: static;
+    flex: 1;
+    padding-left: 4px;
+  }
+  .table:has(.history li) .stage-meta {
+    display: none;
+  }
+  .stage-badge {
+    position: static;
+    order: 1;
+    margin-left: auto;
+    white-space: nowrap;
+  }
+  .history {
+    flex: 1;
+    height: 24px;
+  }
+  .history:empty {
+    display: none;
+  }
+  .history li {
+    min-width: 24px;
+    height: 24px;
+  }
+  .board {
+    grid-template-columns: 44px 44px repeat(3, minmax(0, 1fr));
+    grid-template-rows: 26px repeat(13, 23px);
+    gap: 2px;
+  }
+  /* A chip sits beside its spot's name, or under it on a narrow spot. */
+  .spot {
+    grid-area: var(--down);
+    display: flex;
+    flex-wrap: wrap;
+    align-content: center;
+    justify-content: center;
+    gap: 2px 6px;
+    font-size: 12px;
+  }
+  .spot .chip {
+    position: static;
+    min-width: 20px;
+    height: 20px;
+    font-size: 9px;
+  }
+  /* The wheel comes over the board while it spins, and a tap sends it away. */
+  .wheel-box {
+    position: fixed;
+    inset: 0;
+    z-index: 3;
+    width: auto;
+    align-content: center;
+    background: color-mix(in srgb, var(--dark) 88%, transparent);
+    opacity: 0;
+    visibility: hidden;
+    transition:
+      opacity 0.3s,
+      visibility 0.3s;
+  }
+  .table[data-show] .wheel-box {
+    opacity: 1;
+    visibility: visible;
+  }
+  .disc {
+    width: min(300px, 80vw);
+  }
+  .landed {
+    font-size: 40px;
+  }
+  .dock {
+    margin: 0 -14px;
+    padding: 8px 14px 10px;
+    border-top: 1px solid var(--line);
+  }
+  .dock .status {
+    padding-bottom: 6px;
+    line-height: 1.45;
+  }
+  .chip-field .field-label {
+    display: none;
+  }
+  .total {
+    height: 40px;
+    padding: 0 12px;
+    align-items: center;
+  }
+  .chips {
+    gap: 6px;
+    height: 40px;
+  }
+  .chip-pick {
+    width: 38px;
+    height: 38px;
+  }
+  .controls .secondary,
+  .controls .primary {
+    padding: 0 12px;
   }
 }

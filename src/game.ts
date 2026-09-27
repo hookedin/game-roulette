@@ -1,12 +1,13 @@
 /**
- * Roulette where everyone at the table shares one spin. The page lays chips on the layout and asks the wallet to place
+ * Roulette where everyone at the table shares one spin. The page lays chips on the board and asks the wallet to place
  * the whole layout as one developer bet in the group of the spin the table shows, its meta naming the chips: its stake
  * goes to the game's developer, who runs the wheel. The spin's ID is the hash of its rounds and of the seeds the
  * wheel's casino bets on them bring, all fixed before anybody bets. At the spin the wheel walks down a tree of the
  * pockets, one casino bet of its own per round, and pays each layout what it wins on the pocket the walk reaches. Once
  * the wallet has collected that, it sends the page the settled receipt, and the page works out the number itself from
- * the casino's record of each round, read through the wallet and checked against the spin its bet named. The wheel
- * plays with ETH: a wallet that practices with play money watches the table, and bets nothing.
+ * the casino's record of each round, read through the wallet and checked against the spin its bet named. A spin the
+ * player has no bet on lands where the wheel kept it. The wheel plays with ETH: a wallet that practices with play money
+ * watches the table, and bets nothing.
  */
 import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
@@ -15,6 +16,7 @@ import type { GameReceipt } from '@hookedin/play/sdk/sdk';
 import { mountBank } from '@hookedin/play/sdk/bank';
 import { ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf, wireChips } from './table.ts';
 import type { Chips } from './table.ts';
+import { BETTING_MS } from '../server/wheel.ts';
 import type { Spin } from '../server/wheel.ts';
 import { mountWheel } from './wheel-view.ts';
 
@@ -39,27 +41,51 @@ interface Table {
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 /** Too late for this spin: the wheel is about to spin, and a bet now would come too late for it and come back. */
 const LAST_CALL_MS = 3000;
+/** The rack's chips, each so many of the wallet's recommended stake. */
+const RACK = [1, 10, 100, 1000];
+/** How long a phone shows where the ball landed before the board comes back. */
+const LINGER_MS = 2500;
+/** A roll that no number comes for stops. */
+const ROLL_MS = 60_000;
+const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', odd: 'Odd', high: '19–36' };
 
 (() => {
   'use strict';
   const bank = mountBank($('bank')),
     wheel = mountWheel($<HTMLCanvasElement>('wheel'), matchMedia('(prefers-reduced-motion: reduce)').matches),
-    stakeInput = $<HTMLInputElement>('stake');
+    board = $('board');
   let scope = '',
     asset = 'ETH',
+    /** The wallet's recommended stake: what the rack's smallest chip is worth. */
+    unit = 0n,
+    /** The chip in hand, as a number of units. */
+    hand = 1,
     /** The wallet practices, and a developer bet is placed with ETH: the table is watched, not bet on. */
     practice = false,
     ready = false,
     working = false,
+    /** The wheel cannot be reached, so there is no spin to bet on. */
+    offline = false,
+    /** The spin is due and the wheel turns, until its number is known here: the spin it rolls for, and since when. */
+    rolling: { spin: string | null; since: number } | null = null,
     spinning = false,
     /** A settled bet is being landed: read its spin, then spin the wheel to it. */
     landing = false,
     chips: Chips = {},
+    /** The board before each change, for Undo. */
+    past: Chips[] = [],
+    /** The chips of the last bet placed: the board holds them again, to bet again. */
+    last = '',
     saved: Saved | null = null,
     table: Table | null = null,
+    /** The spin the table showed at the last look: once the table moves on from it, it has landed. */
+    seen: string | null = null,
     /** The server's clock minus this page's. */
     skew = 0,
-    won: number | null = null;
+    /** Where the ball last landed, and whether the chips on the board rode that spin. */
+    landed: number | null = null,
+    rode = false,
+    linger: ReturnType<typeof setTimeout> | undefined;
 
   const message = (text: string, error = false) => {
     $('status').textContent = text;
@@ -68,119 +94,203 @@ const LAST_CALL_MS = 3000;
   const persist = () => (saved ? localStorage.setItem(scope, JSON.stringify(saved)) : localStorage.removeItem(scope));
   const total = () => Object.values(chips).reduce((sum, amount) => sum + amount, 0n);
   const remaining = () => (table?.closesAt ? table.closesAt - (Date.now() + skew) : Infinity);
+  const eth = (amount: bigint | string) => `${HookedIn.formatAmount(amount, 9)} ${asset}`;
+  /** A layout as one string, whatever order its chips went down in. */
+  const same = (board: Chips) => JSON.stringify(Object.entries(wireChips(board)).sort());
+  /** So many units, as a chip reads: 5, 250, 1.5K, 20K. */
+  const short = (units: number) =>
+    units >= 1e6
+      ? `${+(units / 1e6).toFixed(1)}M`
+      : units >= 1e3
+        ? `${+(units / 1e3).toFixed(1)}K`
+        : `${+units.toFixed(2)}`;
+  /** The chips cannot move before the wallet answers, while a request is in flight, a bet is on the spin or the wheel
+   * turns, or when the wallet practices. */
+  const locked = () => !ready || practice || working || Boolean(rolling) || spinning || Boolean(saved);
+  const idle = () =>
+    practice
+      ? 'Practice watches this table: the wheel plays with ETH. Switch to ETH to bet.'
+      : `Pick a chip and tap the board. Chip 1 is ${eth(unit)}.`;
+  /** The wheel, this page's own server. A reply that cannot be read is the wheel being away. */
   async function wheelAPI<T = Table>(path: string, post = false): Promise<T> {
-    const response = await fetch(`./api${path}`, post ? { method: 'POST', body: '{}' } : {});
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.error || 'The wheel is unavailable.');
+    const response = await fetch(`./api${path}`, post ? { method: 'POST', body: '{}' } : {}),
+      value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || 'The wheel is offline.');
     return value;
   }
 
-  // --- The layout ---------------------------------------------------------------------------
+  // --- The board ----------------------------------------------------------------------------
 
-  function spot(id: string, label: string, className = '') {
+  /** A spot at `row` and `col` of the board laid out lengthwise, `rows` high and `cols` wide: zero at the left, three
+   * rows of twelve numbers with their 2:1 column bets at the right, the dozens and the even-money bets below. A phone
+   * shows the board turned a quarter clockwise, standing up. */
+  function spot(id: string, label: string, name: string, row: number, col: number, rows = 1, cols = 1) {
     const button = document.createElement('button');
     button.type = 'button';
-    button.className = `spot ${className}`.trim();
+    button.className = 'spot';
     button.dataset.spot = id;
+    button.dataset.name = name;
     if (/^\d+$/.test(id)) button.dataset.colour = colour(Number(id));
     else if (id === 'red' || id === 'black') button.dataset.colour = id;
+    button.style.setProperty('--across', `${row} / ${col} / span ${rows} / span ${cols}`);
+    button.style.setProperty('--down', `${col} / ${7 - row - rows} / span ${cols} / span ${rows}`);
     button.append(label);
     return button;
   }
-  function buildLayout() {
-    const cells: HTMLElement[] = [spot('0', '0', 'zero')];
-    // Three rows of twelve, as on the felt: 3 6 9 … on top, 1 4 7 … at the bottom, a column bet at each row's end.
-    for (const row of [3, 2, 1]) {
-      for (let column = 0; column < 12; column++) cells.push(spot(String(column * 3 + row), String(column * 3 + row)));
-      cells.push(spot(`column:${row}`, '2:1'));
+  /** The board, and the rack of chips beside it. */
+  function build() {
+    const spots = [spot('0', '0', '0', 1, 1, 3)];
+    for (let n = 1; n <= 36; n++)
+      spots.push(spot(String(n), String(n), String(n), 3 - ((n - 1) % 3), Math.ceil(n / 3) + 1));
+    for (const k of [1, 2, 3]) {
+      const [from, to] = [12 * k - 11, 12 * k];
+      spots.push(spot(`column:${k}`, '2:1', `Column ${k}, pays 3 for 1`, 4 - k, 14));
+      spots.push(spot(`dozen:${k}`, `${from}–${to}`, `${from} to ${to}`, 4, 4 * k - 2, 1, 4));
     }
-    const gap = () => Object.assign(document.createElement('span'), { className: 'gap' });
-    cells.push(gap(), spot('dozen:1', '1 – 12', 'dozen'), spot('dozen:2', '13 – 24', 'dozen'));
-    cells.push(spot('dozen:3', '25 – 36', 'dozen'), gap(), gap());
-    for (const [id, label] of [
-      ['low', '1 – 18'],
-      ['even', 'Even'],
-      ['red', 'Red'],
-      ['black', 'Black'],
-      ['odd', 'Odd'],
-      ['high', '19 – 36'],
-    ])
-      cells.push(spot(id!, label!, 'outside'));
-    $('layout').replaceChildren(...cells);
+    Object.entries(EVEN_MONEY).forEach(([id, label], i) =>
+      spots.push(spot(id, label, label.replace('–', ' to '), 5, 2 * i + 2, 1, 2)),
+    );
+    board.replaceChildren(...spots);
+    $('chips').replaceChildren(
+      ...RACK.map(size => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.className = 'chip-pick';
+        button.dataset.size = String(size);
+        button.textContent = short(size);
+        return button;
+      }),
+    );
   }
+  /** Put down, or with `-1` take up, one chip of the size in hand. */
   function chip(id: string, direction: 1 | -1) {
-    if (locked()) return;
-    let unit: bigint;
-    try {
-      unit = BigInt(HookedIn.parseAmount(stakeInput.value));
-    } catch (error: any) {
-      return message(error.message, true);
-    }
-    const amount = (chips[id] ?? 0n) + BigInt(direction) * unit;
+    if (locked() || (direction < 0 && !chips[id])) return;
+    const amount = (chips[id] ?? 0n) + BigInt(direction * hand) * unit;
+    past.push({ ...chips });
     if (amount > 0n) chips[id] = amount;
     else delete chips[id];
-    won = null;
+    rode = false;
     render();
   }
-  /** The chips cannot move while a request is in flight, a bet is on the spin, the wheel is turning, or the wallet
-   * practices. */
-  const locked = () => working || spinning || Boolean(saved) || practice;
+  /** Light the numbers a spot covers. */
+  function cover(id: string | undefined) {
+    const numbers = id ? covers(id) : [];
+    for (const button of board.querySelectorAll<HTMLElement>('.spot'))
+      button.toggleAttribute('data-covered', numbers.includes(Number(button.dataset.spot)));
+  }
 
   // --- What the player sees ----------------------------------------------------------------
 
   function render() {
-    for (const button of $('layout').querySelectorAll<HTMLElement>('.spot')) {
+    const left = remaining(),
+      late = left < LAST_CALL_MS,
+      turning = Boolean(rolling) || spinning;
+    for (const button of board.querySelectorAll<HTMLElement>('.spot')) {
       const id = button.dataset.spot!,
-        amount = chips[id];
+        amount = chips[id],
+        hit = landed !== null && covers(id).includes(landed);
       button.querySelector('.chip')?.remove();
       if (amount)
         button.append(
           Object.assign(document.createElement('span'), {
             className: 'chip',
-            textContent: HookedIn.formatAmount(amount),
+            textContent: short(Number(amount) / Number(unit || 1n)),
           }),
         );
-      button.dataset.won = String(won !== null && Boolean(amount) && covers(id).includes(won));
+      button.toggleAttribute('data-landed', id === String(landed));
+      button.dataset.won = String(rode && Boolean(amount) && hit);
+      button.dataset.lost = String(rode && Boolean(amount) && !hit);
+      button.setAttribute('aria-label', amount ? `${button.dataset.name}: ${eth(amount)}` : button.dataset.name!);
     }
-    $('layout').dataset.locked = String(locked());
+    board.dataset.locked = String(locked());
+    for (const button of $('chips').querySelectorAll<HTMLButtonElement>('button')) {
+      const size = Number(button.dataset.size);
+      button.setAttribute('aria-pressed', String(size === hand));
+      button.setAttribute('aria-label', unit ? `Chip of ${eth(BigInt(size) * unit)}` : `Chip ${short(size)}`);
+      button.disabled = !ready || practice;
+    }
+    $('chip-label').textContent = unit ? `Chip · ${eth(BigInt(hand) * unit)}` : 'Chip';
     $('total').textContent = HookedIn.formatAmount(total(), 9);
-    const left = remaining(),
-      seconds = Math.max(0, Math.ceil(left / 1000));
-    $('phase').textContent = spinning
-      ? 'NO MORE BETS'
-      : saved
-        ? 'YOUR BET IS IN'
-        : left < LAST_CALL_MS
-          ? 'NO MORE BETS'
-          : 'PLACE YOUR BETS';
-    $('clock').textContent = Number.isFinite(left) ? `Spins in ${seconds}s` : 'Spins when the first chip is down';
+    $('phase').textContent = offline
+      ? 'Table closed'
+      : practice
+        ? 'Watching'
+        : turning || (late && table?.closesAt)
+          ? 'No more bets'
+          : saved
+            ? 'Your bet is in'
+            : 'Place your bets';
+    $('clock').textContent = offline
+      ? 'Wheel offline'
+      : turning
+        ? 'Spinning'
+        : !table
+          ? 'Connecting…'
+          : !table.spin
+            ? 'Next spin opening'
+            : table.closesAt === null
+              ? `Spins ${BETTING_MS / 1000}s after the first bet`
+              : `Spins in ${Math.max(0, Math.ceil(left / 1000))}s`;
     // What is down is ETH, which a practicing wallet would read as play money: it sees who is at the table.
-    $('players').textContent = table?.players
-      ? `${table.players} at the table${practice ? '' : ` · ${HookedIn.formatAmount(table.staked)} ${asset} down`}`
-      : 'The table is open.';
+    $('players').textContent = offline
+      ? 'The wheel is offline.'
+      : !table
+        ? 'Connecting to the wheel…'
+        : table.players
+          ? `${table.players} ${table.players === 1 ? 'player' : 'players'} on this spin${practice ? '' : ` · ${eth(table.staked)}`}`
+          : 'No bets on this spin yet';
     const place = $<HTMLButtonElement>('place');
-    place.disabled = !ready || locked() || !total() || left < LAST_CALL_MS;
+    place.disabled = locked() || offline || !table?.spin || !total() || late;
     place.textContent = !ready
       ? 'Connecting wallet…'
       : practice
-        ? 'Plays with ETH'
-        : spinning
-          ? 'Spinning…'
-          : saved
-            ? 'Bet placed'
-            : 'Place bets ↗';
+        ? 'Bets need ETH'
+        : offline
+          ? 'Table closed'
+          : working
+            ? 'Placing…'
+            : turning
+              ? 'Spinning…'
+              : saved
+                ? 'Bet placed'
+                : late && table?.closesAt
+                  ? 'No more bets'
+                  : total() && same(chips) === last
+                    ? 'Bet again ↗'
+                    : 'Place bets ↗';
+    $<HTMLButtonElement>('undo').disabled = locked() || !past.length;
     $<HTMLButtonElement>('clear').disabled = locked() || !total();
-    stakeInput.disabled =
-      $<HTMLButtonElement>('bet-up').disabled =
-      $<HTMLButtonElement>('bet-down').disabled =
-        locked();
     bank.setBusy(working || spinning);
   }
+  /** Show the wheel over a phone's board, or let the board come back. */
+  function spotlight(on: boolean) {
+    clearTimeout(linger);
+    $('table').toggleAttribute('data-show', on);
+  }
   function remember(number: number) {
-    const mark = Object.assign(document.createElement('span'), { textContent: String(number) });
+    const mark = Object.assign(document.createElement('li'), { textContent: String(number) });
     mark.dataset.colour = colour(number);
     $('history').prepend(mark);
-    while ($('history').children.length > 10) $('history').lastElementChild!.remove();
+    while ($('history').children.length > 12) $('history').lastElementChild!.remove();
+  }
+  /** Four times a second: the clock, and the wheel once the spin is due. */
+  function tick() {
+    if (table?.closesAt && remaining() <= 0 && !rolling && !spinning) {
+      rolling = { spin: table.spin, since: Date.now() };
+      // A bet on the spin shows what it won once the ball has landed, not when the wallet collects it.
+      if (saved?.placed) bank.hold(true);
+      wheel.roll();
+      spotlight(true);
+    }
+    // Nobody laid a layout, so the spin waits for one; or no number came for it at all.
+    if (rolling && ((table?.spin === rolling.spin && !table.closesAt) || Date.now() - rolling.since > ROLL_MS)) stop();
+    render();
+  }
+  function stop() {
+    rolling = null;
+    wheel.stop();
+    spotlight(false);
+    if (!landing) bank.hold(false);
   }
 
   // --- The bet -----------------------------------------------------------------------------
@@ -189,8 +299,8 @@ const LAST_CALL_MS = 3000;
   async function keptSpin(id: string): Promise<Spin | null> {
     const response = await fetch(`./api/spins/${id}`);
     if (response.status === 404) return null;
-    const value = await response.json();
-    if (!response.ok) throw new Error(value.error || 'The wheel is unavailable.');
+    const value = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(value.error || 'The wheel is offline.');
     return value;
   }
   /** The number a spin's walk reached, worked out here from the casino's record of each of its rounds, read through the
@@ -222,11 +332,10 @@ const LAST_CALL_MS = 3000;
       return null;
     }
   }
-  /** The ball lands, then the money shows. A bet the walk did not cover is owed its stake back, and its chips stay on
-   * the layout. Whatever happens, the bet is landed once: the wallet's pushed receipt and the page asking for it can
-   * both arrive. */
+  /** The ball lands, then the money shows. A bet the walk did not cover is owed its stake back. Whatever happens, the
+   * bet is landed once: the wallet's pushed receipt and the page asking for it can both arrive. */
   async function land(receipt: GameReceipt) {
-    if (landing || !saved || saved.id !== receipt.id) return;
+    if (landing || spinning || !saved || saved.id !== receipt.id) return;
     landing = true;
     try {
       const bet = saved,
@@ -235,56 +344,85 @@ const LAST_CALL_MS = 3000;
         number = spin && (await walked(bet, spin)),
         pays = number === null ? null : (payouts(layout(bet.chips, bet.stake) ?? {}).get(number) ?? 0n),
         covered = Boolean(spin?.covered.includes(receipt.bet!));
+      saved = null;
+      persist();
       if (covered && pays === null) {
-        saved = null;
-        persist();
+        stop();
         bank.hold(false);
-        message(
-          `The wheel shows a spin its rounds at the casino do not bear out. It paid ${HookedIn.formatAmount(payout, 9)} ${asset}.`,
-          true,
-        );
+        message(`The wheel's spin does not match the casino's records. It paid ${eth(payout)}.`, true);
         return render();
       }
       const owed = covered ? pays! : BigInt(bet.stake),
-        short =
-          payout < owed
-            ? ` The wheel paid ${HookedIn.formatAmount(payout, 9)} ${asset} of the ${HookedIn.formatAmount(owed, 9)} ${asset} it owes this bet.`
-            : '';
-      if (!covered)
-        return returned(
-          `The wheel did not cover your bet on this spin${
-            pays === null ? '' : `: its chips would have won ${HookedIn.formatAmount(pays, 9)} ${asset} on ${number}`
+        short = payout < owed ? ` The wheel paid ${eth(payout)} of the ${eth(owed)} it owes this bet.` : '';
+      if (!covered) {
+        bank.hold(false);
+        message(
+          `Your bet came too late for its spin, so its stake is back${
+            pays === null ? '' : `: its chips would have won ${eth(pays)} on ${number}`
           }.${short}`,
+          true,
         );
-      await spinTo(bet, number!, payout, short);
+        if (number === null) return stop();
+        return show(number);
+      }
+      await show(number!, { stake: bet.stake, payout, short });
     } finally {
       landing = false;
     }
   }
-  async function spinTo(bet: Saved, number: number, payout: bigint, short: string) {
-    saved = null;
-    persist();
+  /** The ball lands on `number`: the wheel slows to it, the board marks it and the strip keeps it. `paid` is the
+   * player's own bet on the spin: its stake, what it paid, and what it was paid short. */
+  async function show(number: number, paid?: { stake: string; payout: bigint; short: string }) {
     spinning = true;
-    bank.withhold(payout);
+    rolling = null;
+    spotlight(true);
+    $('result').textContent = '';
+    if (paid) {
+      bank.withhold(paid.payout);
+      bank.hold(false);
+    }
     render();
     await wheel.spin(number);
-    bank.withhold(-payout);
-    bank.hold(false);
     spinning = false;
-    won = number;
+    landed = number;
+    rode = Boolean(paid);
     $('landed').textContent = String(number);
     $('landed').dataset.colour = colour(number);
     remember(number);
-    message(
-      (payout
-        ? `${number} ${colour(number)}. ${HookedIn.formatAmount(payout, 9)} ${asset} back from ${HookedIn.formatAmount(bet.stake, 9)} ${asset} of chips.`
-        : `${number} ${colour(number)}. Nothing on it this time.`) + short,
-      Boolean(short),
-    );
+    // A win is more back than the chips cost; less is only some of them back.
+    const won = Boolean(paid && paid.payout > BigInt(paid.stake));
+    $('result').dataset.win = String(won);
+    $('result').textContent = !paid
+      ? ''
+      : won
+        ? `You win ${eth(paid.payout)}`
+        : paid.payout
+          ? `${eth(paid.payout)} back`
+          : 'No win';
+    if (paid) {
+      bank.withhold(-paid.payout);
+      message(
+        `${number} ${colour(number)}: ${
+          won
+            ? `you win ${eth(paid.payout)} on ${eth(paid.stake)} of chips`
+            : paid.payout
+              ? `${eth(paid.payout)} back on ${eth(paid.stake)} of chips`
+              : 'no win this time'
+        }.${paid.short} Your chips stay on the board.`,
+        Boolean(paid.short),
+      );
+    }
+    linger = setTimeout(() => spotlight(false), LINGER_MS);
     render();
   }
-  /** A bet the casino did not take, or one the wheel did not cover because it came too late for its spin: the chips
-   * are the player's again. */
+  /** A spin the player had no bet on, once the table has moved on from it: it lands where the wheel kept it. */
+  async function watched(id: string) {
+    const spin = await keptSpin(id).catch(() => null);
+    if (spinning || landing) return;
+    if (spin) await show(spin.number);
+    else if (rolling) stop();
+  }
+  /** A bet the casino did not take: the chips are the player's again. */
   function returned(why: string) {
     saved = null;
     persist();
@@ -299,6 +437,8 @@ const LAST_CALL_MS = 3000;
     if (saved!.placed) return;
     saved!.placed = true;
     persist();
+    last = same(chips);
+    past = [];
     bank.hold(false);
     // Tell the wheel somebody bet, so that its clock starts now and not at its next look.
     table = await wheelAPI<Table>('/table/placed', true).catch(() => table);
@@ -360,30 +500,45 @@ const LAST_CALL_MS = 3000;
     try {
       table = await wheelAPI<Table>('/table');
       skew = table.now - Date.now();
-      // The wallet has yet to answer for the bet: ask again. Once the table has moved on from its spin, ask the wallet
-      // about it, so it collects the bet at once; the settled receipt arrives by itself, and is here already if it was
-      // collected.
-      if (saved && !saved.placed && !working && !spinning) await act(ask);
-      else if (saved?.placed && table.spin !== saved.spin && !spinning && !landing) {
-        const receipt = await HookedIn.receipt(saved.id);
-        if (receipt?.status === 'settled') await settle(receipt);
-      }
+      if (offline && !saved && ready) message(idle());
+      offline = false;
+      // The table moved on from the spin it showed: that spin has landed. The player's own bet on it lands below.
+      const moved = seen !== table.spin ? seen : null,
+        mine = saved?.spin;
+      seen = table.spin;
+      if (moved && moved !== mine) void watched(moved);
     } catch (error: any) {
-      if (!saved) message(error.message, true);
+      if (!offline && !saved) message(`${error.message} The table opens when it is back.`, true);
+      offline = true;
     }
+    // The wallet has yet to answer for the bet: ask again. Once the table has moved on from its spin, ask the wallet
+    // about it, so it collects the bet at once; the settled receipt arrives by itself, and is here already if it was
+    // collected.
+    if (!offline)
+      try {
+        if (saved && !saved.placed && !working && !spinning) await act(ask);
+        else if (saved?.placed && table!.spin !== saved.spin && !spinning && !landing) {
+          bank.hold(true);
+          const receipt = await HookedIn.receipt(saved.id);
+          if (receipt?.status === 'settled') void settle(receipt);
+        }
+      } catch (error: any) {
+        if (!saved) message(error.message, true);
+      }
     render();
     setTimeout(watch, 1000);
   }
   async function start() {
     try {
-      const startup = await HookedIn.initializeGame({
-        stakeInput,
-        assetLabels: document.querySelectorAll('[data-asset]'),
-      });
-      asset = startup.asset;
-      practice = startup.practice;
-      scope = startup.scope;
-      bank.update(startup.state);
+      const hello = await HookedIn.hello(),
+        info = await HookedIn.info(),
+        state = await HookedIn.balance();
+      asset = hello.asset.symbol;
+      practice = hello.practice;
+      unit = BigInt(info.recommendedStake);
+      scope = HookedIn.storageScope(info);
+      for (const label of document.querySelectorAll('[data-asset]')) label.textContent = asset;
+      bank.update(state);
       saved = JSON.parse(localStorage.getItem(scope) ?? 'null');
       ready = true;
       // A developer bet's settled receipt arrives by itself once the wallet has collected it.
@@ -395,44 +550,66 @@ const LAST_CALL_MS = 3000;
         const receipt = await HookedIn.receipt(saved.id);
         // Paid while away, still waiting for its spin, or never signed at all.
         if (receipt) await settle(receipt);
-        else if (startup.state.pending) await act(ask);
+        else if (state.pending) await act(ask);
         else {
           saved = null;
           persist();
         }
       }
-      if (!saved)
-        message(
-          practice
-            ? 'The wheel plays with ETH. Watch the table here, and set up your wallet with ETH to bet.'
-            : 'Put chips on the layout. Everyone shares the spin.',
-        );
+      if (!saved && !offline) message(idle());
     } catch (error: any) {
       message(error.message, true);
     }
     render();
-    void watch();
   }
 
-  buildLayout();
-  $('layout').addEventListener('click', event => {
-    const id = (event.target as HTMLElement).closest<HTMLElement>('.spot')?.dataset.spot;
-    if (id) chip(id, event.shiftKey ? -1 : 1);
+  build();
+  board.addEventListener('click', event => {
+    const spot = (event.target as HTMLElement).closest<HTMLElement>('.spot');
+    if (!spot) return;
+    chip(spot.dataset.spot!, event.shiftKey ? -1 : 1);
+    // A spot clicked with a pointer lets go of the focus, so that Space places the bets; the keyboard keeps it.
+    if (event.detail) spot.blur();
   });
-  $('layout').addEventListener('contextmenu', event => {
+  board.addEventListener('contextmenu', event => {
     const id = (event.target as HTMLElement).closest<HTMLElement>('.spot')?.dataset.spot;
     if (!id) return;
     event.preventDefault();
     chip(id, -1);
   });
-  $('place').addEventListener('click', () => act(place));
-  $('clear').addEventListener('click', () => {
-    chips = {};
-    won = null;
+  board.addEventListener('pointerover', event =>
+    cover((event.target as HTMLElement).closest<HTMLElement>('.spot')?.dataset.spot),
+  );
+  board.addEventListener('pointerleave', () => cover(undefined));
+  $('chips').addEventListener('click', event => {
+    const size = (event.target as HTMLElement).closest<HTMLElement>('.chip-pick')?.dataset.size;
+    if (!size) return;
+    hand = Number(size);
     render();
   });
-  $('bet-up').addEventListener('click', () => HookedIn.stepStake(stakeInput, true));
-  $('bet-down').addEventListener('click', () => HookedIn.stepStake(stakeInput, false));
+  $('undo').addEventListener('click', () => {
+    if (locked() || !past.length) return;
+    chips = past.pop()!;
+    rode = false;
+    render();
+  });
+  $('clear').addEventListener('click', () => {
+    if (locked() || !total()) return;
+    past.push(chips);
+    chips = {};
+    rode = false;
+    render();
+  });
+  $('place').addEventListener('click', () => act(place));
+  // Space places the bets, unless a control has the focus and takes the key itself.
+  addEventListener('keydown', event => {
+    if (event.code !== 'Space' || event.target !== document.body) return;
+    event.preventDefault();
+    if (!event.repeat && !$<HTMLButtonElement>('place').disabled) void act(place);
+  });
+  $('wheel-box').addEventListener('click', () => spotlight(false));
   render();
+  setInterval(tick, 250);
+  void watch();
   void start();
 })();
