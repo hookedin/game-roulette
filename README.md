@@ -13,7 +13,7 @@ This repository is also a GitHub template: the starting point for a game with a 
 3. The wheel spins twenty seconds after the first chip at the table is down.
 4. The ball lands for everyone at once. A number returns 36 for 1, a dozen or a column 3 for 1, and the even-money bets 2 for 1. Zero is the house's: that is the whole 2.7% edge.
 
-The wheel plays with ETH. A wallet that practices with test coins watches the table, and bets once it has a funded channel: a developer bet is settled by the wheel at the casino, and practice never reaches the casino.
+The wheel plays with ETH. A wallet that practices watches the table, and bets once it plays with ETH: a developer bet is settled by the wheel at the casino, and practice never reaches the casino.
 
 ## How it works
 

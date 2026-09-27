@@ -6,7 +6,7 @@
  * pockets, one casino bet of its own per round, and pays each layout what it wins on the pocket the walk reaches. Once
  * the wallet has collected that, it sends the page the settled receipt, and the page works out the number itself from
  * the casino's record of each round, read through the wallet and checked against the spin its bet named. The wheel
- * plays with ETH: a wallet that practices with test coins watches the table, and bets nothing.
+ * plays with ETH: a wallet that practices with play money watches the table, and bets nothing.
  */
 import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
@@ -154,7 +154,7 @@ const LAST_CALL_MS = 3000;
           ? 'NO MORE BETS'
           : 'PLACE YOUR BETS';
     $('clock').textContent = Number.isFinite(left) ? `Spins in ${seconds}s` : 'Spins when the first chip is down';
-    // What is down is ETH, which a practicing wallet would read as test coins: it sees who is at the table.
+    // What is down is ETH, which a practicing wallet would read as play money: it sees who is at the table.
     $('players').textContent = table?.players
       ? `${table.players} at the table${practice ? '' : ` · ${HookedIn.formatAmount(table.staked)} ${asset} down`}`
       : 'The table is open.';
