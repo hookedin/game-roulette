@@ -167,28 +167,37 @@ function table(first = 0) {
   return x;
 }
 
-test('an empty table waits; the first bet starts the clock; the walk pays every layout what it wins on its pocket', async () => {
+test('the wheel turns on its clock: an empty turn lands at random on the same spin, a turn with layouts walks and pays', async () => {
   const t = table();
   const first = await t.wheel.view();
-  assert.deepEqual([first.closesAt, first.players], [null, 0]);
+  assert.deepEqual([first.closesAt, first.players, first.landed], [t.deps.now() + BETTING_MS, 0, []]);
   const opened = t.saves.at(-1)!.spin!;
   assert.equal(opened.id, first.spin, 'the spin is saved before anybody is told of it');
   assert.equal(opened.rounds.length, 6, 'a round for each level of a tree of 37 pockets');
   assert.deepEqual(opened.seedHashes, await Promise.all(opened.rounds.map(t.deps.developer.seedHash)));
   assert.equal(first.spin, spinId(opened.rounds, opened.seedHashes), 'and its ID commits to its rounds and seeds');
-  t.advance(60_000);
-  assert.equal((await t.wheel.view()).closesAt, null, 'nobody is in, so nothing spins');
-  assert.ok(!t.calls.includes('casinoBet'));
+  // Nobody bets, and the turn comes: nothing rides on it, so the ball lands on a pocket drawn at random.
+  t.advance(BETTING_MS);
+  const empty = await t.wheel.view();
+  assert.deepEqual([empty.landed.length, empty.landed[0]!.at, empty.landed[0]!.spin], [1, t.deps.now(), null]);
+  assert.ok(ORDER.includes(empty.landed[0]!.number));
+  assert.deepEqual(
+    [empty.spin, empty.closesAt],
+    [first.spin, t.deps.now() + BETTING_MS],
+    'its spin takes the next turn',
+  );
+  assert.ok(!t.calls.includes('casinoBet') && !t.calls.includes('reveal'), 'no round is revealed');
+  assert.equal(await t.wheel.kept(first.spin!), null, 'and nothing is kept');
+  assert.deepEqual(t.wakes, [], 'nor is the wheel woken: nobody is in');
   // A page says its wallet placed a bet; the wheel believes the casino, not the page.
-  const placedAt = t.deps.now();
   const layouts: Chips[] = [{ red: 250n }, { '17': 50n }],
     a = t.bet({ uname: 'a', chips: layouts[0] }),
     b = t.bet({ uname: 'a', chips: layouts[1] });
   t.bet({ uname: 'b', spin: 'f'.repeat(64) });
   const placed = await t.wheel.placed();
   assert.deepEqual([placed.players, placed.staked], [1, '300'], 'only the bets on its own spin');
-  assert.equal(placed.closesAt, placedAt + BETTING_MS, 'twenty seconds after the first bet, by the casino');
-  assert.equal(t.wakes.at(-1), placed.closesAt, 'and on time whether or not anybody asks');
+  assert.equal(placed.closesAt, empty.closesAt, 'bets do not move the turn');
+  assert.equal(t.wakes.at(-1), placed.closesAt, 'which comes on time whether or not anybody asks');
   t.advance(BETTING_MS - 1);
   await t.wheel.view();
   assert.ok(!t.calls.includes('casinoBet'), 'not a moment early');
@@ -211,8 +220,33 @@ test('an empty table waits; the first bet starts the clock; the walk pays every 
   assert.equal(t.bank(), 300n - stepsCash(priceSteps(owedOn(layouts), BANKROLL / 2n)));
   assert.ok(t.bank() >= 0n, 'and the stakes paid for it');
   const after = await t.wheel.view();
-  assert.deepEqual([after.closesAt, after.players], [null, 0], 'the table is empty again');
+  assert.deepEqual([after.closesAt, after.players], [t.deps.now() + BETTING_MS, 0], 'the table is empty again');
   assert.notEqual(after.spin, first.spin, 'with a new spin to bet on');
+  assert.deepEqual(after.landed[0], { at: t.deps.now(), number, spin: first.spin }, 'and the landing in the strip');
+});
+
+test('a bet that reaches the casino after a turn nobody bet on rides the next turn of the same spin', async () => {
+  const t = table();
+  const { spin } = await t.wheel.view();
+  t.advance(BETTING_MS);
+  await t.wheel.view();
+  // Signed while the turn took bets, it reached the casino after the ball landed.
+  const late = t.bet({ spin: spin! }),
+    placed = await t.wheel.placed();
+  assert.deepEqual([placed.spin, placed.players], [spin, 1]);
+  t.advance(BETTING_MS);
+  await t.wheel.alarm();
+  const kept = (await t.wheel.kept(spin!))!;
+  assert.deepEqual(kept.covered, [late]);
+  assert.equal(t.paid.get(late), payouts({ red: 100n }).get(kept.number) ?? 0n);
+});
+
+test('a wheel nobody watched lands the turn it missed when somebody looks, and opens the next', async () => {
+  const t = table();
+  const { spin } = await t.wheel.view();
+  t.advance(3_600_000);
+  const later = await t.wheel.view();
+  assert.deepEqual([later.spin, later.closesAt, later.landed.length], [spin, t.deps.now() + BETTING_MS, 1]);
 });
 
 test('every pocket is reached, and the bank holds exactly what the table is owed on each', async () => {
@@ -254,14 +288,15 @@ test('a bet that is not a roulette layout on the spin is not covered, and gets i
   );
 });
 
-test('a table of no layouts waits for one, and gives back what else is in its group', async () => {
+test('a turn of no layouts lands at random, and gives back what else is in its group', async () => {
   const t = table();
   const { spin } = await t.wheel.view();
   const unknown = t.bet({ meta: { chips: { '37': '100' } } });
   await t.spin();
   assert.equal(t.paid.get(unknown), 100n);
   assert.deepEqual([t.calls.includes('casinoBet'), t.calls.includes('reveal')], [false, false], 'no step taken');
-  assert.equal((await t.wheel.view()).spin, spin, 'the same spin takes the next bets');
+  const view = await t.wheel.view();
+  assert.deepEqual([view.spin, view.landed[0]!.spin], [spin, null], 'the same spin takes the next bets');
 });
 
 test('a bet that comes after its spin gets its stake back', async () => {
@@ -358,7 +393,7 @@ test('a step whose reply was lost is found on its round, even after a restart', 
 test('a wheel whose saved spin the casino does not know moves on to a new one', async () => {
   const t = table();
   const lost = { id: 'e'.repeat(64), rounds: ['0x' + 'e'.repeat(64)], seedHashes: ['0x' + 'e'.repeat(64)] },
-    woken = new Wheel(t.deps, { spin: lost, walk: null });
+    woken = new Wheel(t.deps, { spin: lost, walk: null, closesAt: null, landed: [] });
   const view = await woken.view();
   assert.notEqual(view.spin, lost.id);
   assert.equal(t.saves.at(-1)!.spin!.id, view.spin, 'and the new spin is saved');

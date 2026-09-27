@@ -67,8 +67,8 @@ export class RouletteWheel implements DurableObject {
       return Response.json({ error: error.message || 'The wheel is unavailable' }, { status: 503 });
     }
   }
-  /** The wheel spins on time whether or not anybody is asking. An alarm that fails, opening the wheel or reading the
-   * casino, tries again shortly: nothing else wakes a table nobody is watching. */
+  /** A turn somebody bet on is taken on time whether or not anybody is watching. An alarm that fails, opening the
+   * wheel or reading the casino, tries again shortly: nothing else wakes a table nobody is watching. */
   async alarm() {
     try {
       await (await this.open()).alarm();

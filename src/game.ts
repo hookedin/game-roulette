@@ -5,9 +5,10 @@
  * wheel's casino bets on them bring, all fixed before anybody bets. At the spin the wheel walks down a tree of the
  * pockets, one casino bet of its own per round, and pays each layout what it wins on the pocket the walk reaches. Once
  * the wallet has collected that, it sends the page the settled receipt, and the page works out the number itself from
- * the casino's record of each round, read through the wallet and checked against the spin its bet named. A spin the
- * player has no bet on lands where the wheel kept it. The wheel plays with ETH: a wallet that practices with play money
- * watches the table, and bets nothing.
+ * the casino's record of each round, read through the wallet and checked against the spin its bet named. The wheel
+ * turns on its clock whether or not anybody bets, and a turn the player has no bet on lands where the table says: on
+ * the number the wheel's walk reached, or, when nobody bet, on the pocket it drew. The wheel plays with ETH: a wallet
+ * that practices with play money watches the table, and bets nothing.
  */
 import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
@@ -16,8 +17,7 @@ import type { GameReceipt } from '@hookedin/play/sdk/sdk';
 import { mountBank } from '@hookedin/play/sdk/bank';
 import { ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf, wireChips } from './table.ts';
 import type { Chips } from './table.ts';
-import { BETTING_MS } from '../server/wheel.ts';
-import type { Spin } from '../server/wheel.ts';
+import type { Landing, Spin } from '../server/wheel.ts';
 import { mountWheel } from './wheel-view.ts';
 
 /** A bet the wallet was asked to sign, saved first so that a reload finds its result under the same name. */
@@ -37,6 +37,8 @@ interface Table {
   now: number;
   players: number;
   staked: string;
+  /** The last turns' landings, newest first. */
+  landed: Landing[];
 }
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 /** Too late for this spin: the wheel is about to spin, and a bet now would come too late for it and come back. */
@@ -66,8 +68,8 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
     working = false,
     /** The wheel cannot be reached, so there is no spin to bet on. */
     offline = false,
-    /** The spin is due and the wheel turns, until its number is known here: the spin it rolls for, and since when. */
-    rolling: { spin: string | null; since: number } | null = null,
+    /** The turn is due and the wheel rolls, until its number is known here: since when. */
+    rolling: number | null = null,
     spinning = false,
     /** A settled bet is being landed: read its spin, then spin the wheel to it. */
     landing = false,
@@ -78,8 +80,8 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
     last = '',
     saved: Saved | null = null,
     table: Table | null = null,
-    /** The spin the table showed at the last look: once the table moves on from it, it has landed. */
-    seen: string | null = null,
+    /** When the newest landing the table showed was, or null before the first look. */
+    seen: number | null = null,
     /** The server's clock minus this page's. */
     skew = 0,
     /** Where the ball last landed, and whether the chips on the board rode that spin. */
@@ -228,9 +230,7 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
           ? 'Connecting…'
           : !table.spin
             ? 'Next spin opening'
-            : table.closesAt === null
-              ? `Spins ${BETTING_MS / 1000}s after the first bet`
-              : `Spins in ${Math.max(0, Math.ceil(left / 1000))}s`;
+            : `Spins in ${Math.max(0, Math.ceil(left / 1000))}s`;
     // What is down is ETH, which a practicing wallet would read as play money: it sees who is at the table.
     $('players').textContent = offline
       ? 'The wheel is offline.'
@@ -273,17 +273,17 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
     $('history').prepend(mark);
     while ($('history').children.length > 12) $('history').lastElementChild!.remove();
   }
-  /** Four times a second: the clock, and the wheel once the spin is due. */
+  /** Four times a second: the clock, and the wheel once the turn is due. */
   function tick() {
     if (table?.closesAt && remaining() <= 0 && !rolling && !spinning) {
-      rolling = { spin: table.spin, since: Date.now() };
+      rolling = Date.now();
       // A bet on the spin shows what it won once the ball has landed, not when the wallet collects it.
       if (saved?.placed) bank.hold(true);
       wheel.roll();
       spotlight(true);
     }
-    // Nobody laid a layout, so the spin waits for one; or no number came for it at all.
-    if (rolling && ((table?.spin === rolling.spin && !table.closesAt) || Date.now() - rolling.since > ROLL_MS)) stop();
+    // No number came for the turn.
+    if (rolling && Date.now() - rolling > ROLL_MS) stop();
     render();
   }
   function stop() {
@@ -415,12 +415,11 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
     linger = setTimeout(() => spotlight(false), LINGER_MS);
     render();
   }
-  /** A spin the player had no bet on, once the table has moved on from it: it lands where the wheel kept it. */
-  async function watched(id: string) {
-    const spin = await keptSpin(id).catch(() => null);
+  /** A turn the player had no bet on lands where the table says. */
+  async function watched(number: number) {
     if (spinning || landing) return;
-    if (spin) await show(spin.number);
-    else if (rolling) stop();
+    await show(number);
+    if (!landing) bank.hold(false);
   }
   /** A bet the casino did not take: the chips are the player's again. */
   function returned(why: string) {
@@ -502,11 +501,13 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
       skew = table.now - Date.now();
       if (offline && !saved && ready) message(idle());
       offline = false;
-      // The table moved on from the spin it showed: that spin has landed. The player's own bet on it lands below.
-      const moved = seen !== table.spin ? seen : null,
-        mine = saved?.spin;
-      seen = table.spin;
-      if (moved && moved !== mine) void watched(moved);
+      // A new landing: the wheel turns to it, unless the player's own bet rode it, which lands below. The first look
+      // fills the strip with the landings the table has seen.
+      const newest = table.landed[0];
+      if (seen === null) for (const { number } of table.landed.toReversed()) remember(number);
+      else if (newest && newest.at > seen && !(saved?.placed && newest.spin === saved.spin))
+        void watched(newest.number);
+      seen = newest?.at ?? 0;
     } catch (error: any) {
       if (!offline && !saved) message(`${error.message} The table opens when it is back.`, true);
       offline = true;
