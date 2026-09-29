@@ -257,6 +257,9 @@
   }
 }
 @media (max-width: 600px) {
+  .controls {
+    grid-template-areas: 'chips chips chips' 'total total total' 'undo clear place';
+  }
   .table {
     grid-template-columns: minmax(0, 1fr);
     grid-template-areas: 'top' 'board';
@@ -359,11 +362,11 @@
     line-height: 1.45;
   }
   .chip-field .field-label {
-    display: none;
+    margin-bottom: 8px;
   }
   .total {
-    height: 40px;
-    padding: 0 12px;
+    min-height: 40px;
+    padding: 8px 12px;
     align-items: center;
   }
   .chips {

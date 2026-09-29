@@ -440,7 +440,7 @@ const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', od
     if (stake > limit) {
       const funding = await HookedIn.requestFunds({ amount: stake - limit });
       bank.update(funding);
-      if (BigInt(funding.balance) < stake) throw new Error('Add enough money to cover your chips.');
+      if (BigInt(funding.balance) < stake) throw new Error('Increase your game allowance to cover these chips.');
     }
     saved = {
       id: crypto.randomUUID(),
