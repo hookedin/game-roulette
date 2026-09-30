@@ -1,7 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Wallet } from 'ethers';
-import { LIMITS, DEVELOPER_PROTOCOL } from '@hookedin/play/sdk/developer';
+import { DEVELOPER_PROTOCOL } from '@hookedin/play/sdk/developer';
 import { RouletteWheel } from './worker.ts';
 import { RETRY_MS } from './wheel.ts';
 
@@ -26,7 +26,6 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method } })
         chainId: '31337',
         contractAddress: '0x' + 'c'.repeat(40),
         developerProtocol: DEVELOPER_PROTOCOL,
-        limits: LIMITS,
       });
     // The wheel opens its spin's rounds, which the casino names.
     if (path === '/api/rounds') return Response.json({ id: ROUND, status: 'open' });

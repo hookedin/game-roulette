@@ -7,6 +7,25 @@
   gap: 14px 28px;
   padding: 56px 24px 22px;
 }
+.stage-meta {
+  position: absolute;
+  left: 22px;
+  top: 19px;
+  font-size: 9px;
+  letter-spacing: 1.2px;
+  color: var(--muted);
+  text-transform: uppercase;
+}
+.stage-badge {
+  position: absolute;
+  right: 22px;
+  top: 17px;
+  border: 1px solid var(--line);
+  border-radius: 20px;
+  padding: 5px 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
 .wheel-box {
   grid-area: wheel;
   display: grid;

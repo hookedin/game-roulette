@@ -69,7 +69,6 @@ function table(first = 0) {
     return view(id);
   };
   const developer = {
-    address: '0x' + 'a'.repeat(40),
     async openRound() {
       const id = keccak256(secret(++count));
       rounds.set(id, { secret: secret(count) });

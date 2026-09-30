@@ -48,7 +48,6 @@ const bank = mountBank($('bank')),
   wheel = mountWheel($<HTMLCanvasElement>('wheel'), matchMedia('(prefers-reduced-motion: reduce)').matches),
   board = $('board');
 let scope = '',
-  asset = 'ETH',
   /** The wallet's recommended stake: what the rack's smallest chip is worth. */
   unit = 0n,
   /** The chip in hand, as a number of units. */
@@ -85,7 +84,7 @@ const message = (text: string, error = false) => {
 const persist = () => (saved ? localStorage.setItem(scope, JSON.stringify(saved)) : localStorage.removeItem(scope));
 const total = () => Object.values(chips).reduce((sum, amount) => sum + amount, 0n);
 const remaining = () => (table?.closesAt ? table.closesAt - (Date.now() + skew) : Infinity);
-const eth = (amount: bigint | string) => `${HookedIn.formatAmount(amount, 9)} ${asset}`;
+const eth = (amount: bigint | string) => `${HookedIn.formatAmount(amount, 9)} ETH`;
 /** A layout as one string, whatever order its chips went down in. */
 const same = (board: Chips) => JSON.stringify(Object.entries(wireChips(board)).sort());
 /** So many units, as a chip reads: 5, 250, 1.5K, 20K. */
@@ -511,13 +510,10 @@ async function watch() {
 }
 async function start() {
   try {
-    const hello = await HookedIn.hello(),
-      info = await HookedIn.info(),
+    const info = await HookedIn.info(),
       state = await HookedIn.balance();
-    asset = hello.asset.symbol;
     unit = BigInt(info.recommendedStake);
     scope = HookedIn.storageScope(info);
-    for (const label of document.querySelectorAll('[data-asset]')) label.textContent = asset;
     bank.update(state);
     saved = JSON.parse(localStorage.getItem(scope) ?? 'null');
     ready = true;
