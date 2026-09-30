@@ -431,7 +431,8 @@ async function place() {
   if (stake > current) {
     const answer = await HookedIn.requestAllowance({ amount: stake - current });
     allowance.update(answer);
-    if (BigInt(answer.allowance) < stake) throw new Error('Allow this game more ETH to cover these chips, or deposit if your balance is empty.');
+    if (BigInt(answer.allowance) < stake)
+      throw new Error('Allow this game more ETH to cover these chips, or deposit if your balance is empty.');
   }
   saved = {
     id: crypto.randomUUID(),
