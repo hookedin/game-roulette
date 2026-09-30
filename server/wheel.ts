@@ -26,7 +26,7 @@ import { ORDER, coveredHash, layout, owedOn, payouts, spinId, stepOf } from '../
 
 /** A spin the table takes bets on: its rounds, one for each level of the walk, and the hashes of the seeds the wheel's
  * casino bets on them bring. Its ID, `spinId` of the two, is the group of every bet on it. */
-export interface OpenSpin {
+interface OpenSpin {
   id: string;
   rounds: string[];
   seedHashes: string[];
@@ -55,7 +55,7 @@ export interface WheelState {
   /** The last turns' landings, newest first. */
   landed: Landing[];
 }
-export interface Deps {
+interface Deps {
   developer: Developer;
   now(): number;
   save(state: WheelState): void | Promise<void>;
@@ -72,7 +72,7 @@ export const RETRY_MS = 5_000;
 const LOOK_MS = 1_000;
 /** What a bet on a spin is owed: what its chips pay on the number if the walk covered it, and its stake back
  * otherwise, as for a bet on a spin the wheel never walked. */
-export function owed(bet: PublicDeveloperBet, spin: Spin | null | undefined) {
+function owed(bet: PublicDeveloperBet, spin: Spin | null | undefined) {
   const chips = spin?.covered.includes(bet.bet) ? layout(bet.meta?.chips, bet.stake) : null;
   return chips ? (payouts(chips).get(spin!.number) ?? 0n) : BigInt(bet.stake);
 }
