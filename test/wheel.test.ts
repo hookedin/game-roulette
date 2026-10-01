@@ -9,7 +9,7 @@ import type { Spin, WheelState } from '../server/wheel.ts';
 import { ORDER, coveredHash, owedOn, payouts, spinId, stepOf, wireChips } from '../src/table.ts';
 import type { Chips } from '../src/table.ts';
 
-const BANKROLL = 10n ** 9n;
+const VIRTUAL_BANKROLL = 10n ** 9n;
 
 /** A casino that does what the developer kit asks, with the developer's bank and a clock the test turns. Its rounds'
  * secrets are numbered from `first`. */
@@ -75,7 +75,7 @@ function table(first = 0) {
       return view(id);
     },
     seedHash: async (id: string) => seedHash(seedOf(id)),
-    bankroll: async () => BANKROLL,
+    virtualBankroll: async () => VIRTUAL_BANKROLL,
     async round(id: string) {
       // A round the casino never named, or lost with its row, is unknown to it.
       if (!rounds.has(id)) throw Object.assign(new Error('Unknown round'), { status: 404 });
@@ -216,7 +216,7 @@ test('the wheel turns on its clock: an empty turn lands at random on the same sp
     'each is paid what its chips win where the ball landed',
   );
   // The walk hedged exactly: the bank keeps the stakes less the cash the walk needed, whichever pocket it reached.
-  assert.equal(t.bank(), 300n - stepsCash(priceSteps(owedOn(layouts), BANKROLL / 2n)));
+  assert.equal(t.bank(), 300n - stepsCash(priceSteps(owedOn(layouts), VIRTUAL_BANKROLL)));
   assert.ok(t.bank() >= 0n, 'and the stakes paid for it');
   const after = await t.wheel.view();
   assert.deepEqual([after.closesAt, after.players], [t.deps.now() + BETTING_MS, 0], 'the table is empty again');
@@ -265,7 +265,7 @@ test('every pocket is reached, and the bank holds exactly what the table is owed
       bets.map(bet => t.paid.get(bet)),
       layouts.map(chips => payouts(chips).get(kept.number) ?? 0n),
     );
-    assert.equal(t.bank(), 145n - stepsCash(priceSteps(owedOn(layouts), BANKROLL / 2n)));
+    assert.equal(t.bank(), 145n - stepsCash(priceSteps(owedOn(layouts), VIRTUAL_BANKROLL)));
   }
   assert.ok(seen.size > 30, `${seen.size} pockets reached`);
 });

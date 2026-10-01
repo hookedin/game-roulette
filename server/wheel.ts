@@ -7,7 +7,7 @@
  * group, whose meta names the chips, and whose stake goes to the developer's bank.
  *
  * The wheel turns every `BETTING_MS`, whether or not anybody bets. At the turn it works out what it owes on each pocket
- * to every bet that is a roulette layout, prices the walk backward from that against half the casino's bankroll, and
+ * to every bet that is a roulette layout, prices the walk backward from that against the casino's virtual bankroll, and
  * walks it. Each level is one casino bet from its bank, in the spin's group, on the half of the pockets that needs more
  * cash, which the walk goes to when the round's outcome is below the bet's chance: whichever way the round goes, the
  * bank then holds what the rest of the walk needs, and at the pocket what the wheel owes there. A level whose halves
@@ -206,7 +206,7 @@ export class Wheel {
           walk: {
             covered: covered.map(({ bet }) => bet),
             owed: owedOn(covered.map(({ chips }) => chips)).map(String),
-            bankroll: String((await developer.bankroll()) / 2n),
+            bankroll: String(await developer.virtualBankroll()),
           },
         };
         await this.deps.save(this.state);
