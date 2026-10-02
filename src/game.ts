@@ -82,7 +82,7 @@ const message = (text: string, error = false) => {
 const persist = () => (saved ? localStorage.setItem(scope, JSON.stringify(saved)) : localStorage.removeItem(scope));
 const total = () => Object.values(chips).reduce((sum, amount) => sum + amount, 0n);
 const remaining = () => (table?.closesAt ? table.closesAt - (Date.now() + skew) : Infinity);
-const eth = (amount: bigint | string) => `${HookedIn.formatAmount(amount, 9)} ETH`;
+const eth = (amount: bigint | string) => `${HookedIn.formatAmount(amount)} µETH`;
 /** A layout as one string, whatever order its chips went down in. */
 const same = (board: Chips) => JSON.stringify(Object.entries(wireChips(board)).sort());
 /** So many units, as a chip reads: 5, 250, 1.5K, 20K. */
@@ -195,7 +195,7 @@ function render() {
     button.disabled = !ready;
   }
   $('chip-label').textContent = unit ? `Chip · ${eth(BigInt(hand) * unit)}` : 'Chip';
-  $('total').textContent = HookedIn.formatAmount(total(), 9);
+  $('total').textContent = HookedIn.formatAmount(total());
   $('phase').textContent = offline
     ? 'Table closed'
     : turning || (late && table?.closesAt)
