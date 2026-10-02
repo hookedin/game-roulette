@@ -7,7 +7,6 @@ import { HookedIn } from '@hookedin/play/sdk/sdk';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
 import { next, stepOutcome } from '@hookedin/play/sdk/steps';
 import type { GameReceipt } from '@hookedin/play/sdk/sdk';
-import { mountAllowance } from '@hookedin/play/sdk/allowance';
 import { ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf, wireChips } from './table.ts';
 import type { Chips } from './table.ts';
 import type { Landing, Spin } from '../server/wheel.ts';
@@ -44,8 +43,7 @@ const LINGER_MS = 2500;
 const ROLL_MS = 60_000;
 const EVEN_MONEY = { low: '1–18', even: 'Even', red: 'Red', black: 'Black', odd: 'Odd', high: '19–36' };
 
-const allowance = mountAllowance($('allowance')),
-  wheel = mountWheel($<HTMLCanvasElement>('wheel'), matchMedia('(prefers-reduced-motion: reduce)').matches),
+const wheel = mountWheel($<HTMLCanvasElement>('wheel'), matchMedia('(prefers-reduced-motion: reduce)').matches),
   board = $('board');
 let scope = '',
   /** The wallet's recommended stake: what the rack's smallest chip is worth. */
@@ -240,7 +238,6 @@ function render() {
                 : 'Place bets ↗';
   $<HTMLButtonElement>('undo').disabled = locked() || !past.length;
   $<HTMLButtonElement>('clear').disabled = locked() || !total();
-  allowance.setBusy(working || spinning);
 }
 /** Show the wheel over a phone's board, or let the board come back. */
 function spotlight(on: boolean) {
@@ -257,8 +254,6 @@ function remember(number: number) {
 function tick() {
   if (table?.closesAt && remaining() <= 0 && !rolling && !spinning) {
     rolling = Date.now();
-    // A bet on the spin shows what it won once the ball has landed, not when the wallet collects it.
-    if (saved?.placed) allowance.hold(true);
     wheel.roll();
     spotlight(true);
   }
@@ -270,7 +265,6 @@ function stop() {
   rolling = null;
   wheel.stop();
   spotlight(false);
-  if (!landing) allowance.hold(false);
 }
 
 // --- The bet -----------------------------------------------------------------------------
@@ -312,8 +306,9 @@ async function walked(bet: Saved, spin: Spin) {
     return null;
   }
 }
-/** The ball lands, then the money shows. A bet the walk did not cover is owed its stake back. Whatever happens, the
- * bet is landed once: the wallet's pushed receipt and the page asking for it can both arrive. */
+/** The ball lands, then the money shows: what the bet was paid stays out of the allowance the wallet shows until its
+ * spin's group ends here. A bet the walk did not cover is owed its stake back. Whatever happens, the bet is landed
+ * once: the wallet's pushed receipt and the page asking for it can both arrive. */
 async function land(receipt: GameReceipt) {
   if (landing || spinning || !saved || saved.id !== receipt.id) return;
   landing = true;
@@ -326,16 +321,17 @@ async function land(receipt: GameReceipt) {
       covered = Boolean(spin?.covered.includes(receipt.bet!));
     saved = null;
     persist();
+    const shown = () => void HookedIn.end(bet.spin).catch(() => {});
     if (covered && pays === null) {
       stop();
-      allowance.hold(false);
+      shown();
       message(`The wheel's spin does not match the casino's records. It paid ${eth(payout)}.`, true);
       return render();
     }
     const owed = covered ? pays! : BigInt(bet.stake),
       short = payout < owed ? ` The wheel paid ${eth(payout)} of the ${eth(owed)} it owes this bet.` : '';
     if (!covered) {
-      allowance.hold(false);
+      shown();
       message(
         `Your bet came too late for its spin, so its stake is back${
           pays === null ? '' : `: its chips would have won ${eth(pays)} on ${number}`
@@ -346,6 +342,7 @@ async function land(receipt: GameReceipt) {
       return show(number);
     }
     await show(number!, { stake: bet.stake, payout, short });
+    shown();
   } finally {
     landing = false;
   }
@@ -357,10 +354,6 @@ async function show(number: number, paid?: { stake: string; payout: bigint; shor
   rolling = null;
   spotlight(true);
   $('result').textContent = '';
-  if (paid) {
-    allowance.withhold(paid.payout);
-    allowance.hold(false);
-  }
   render();
   await wheel.spin(number);
   spinning = false;
@@ -379,8 +372,7 @@ async function show(number: number, paid?: { stake: string; payout: bigint; shor
       : paid.payout
         ? `${eth(paid.payout)} back`
         : 'No win';
-  if (paid) {
-    allowance.withhold(-paid.payout);
+  if (paid)
     message(
       `${number} ${colour(number)}: ${
         won
@@ -391,7 +383,6 @@ async function show(number: number, paid?: { stake: string; payout: bigint; shor
       }.${paid.short} Your chips stay on the board.`,
       Boolean(paid.short),
     );
-  }
   linger = setTimeout(() => spotlight(false), LINGER_MS);
   render();
 }
@@ -399,13 +390,11 @@ async function show(number: number, paid?: { stake: string; payout: bigint; shor
 async function watched(number: number) {
   if (spinning || landing) return;
   await show(number);
-  if (!landing) allowance.hold(false);
 }
 /** A bet the casino did not take: the chips are the player's again. */
 function returned(why: string) {
   saved = null;
   persist();
-  allowance.hold(false);
   message(`${why ? why + ' ' : ''}Your chips are back.`, true);
   render();
 }
@@ -418,7 +407,6 @@ async function settle(receipt: GameReceipt) {
   persist();
   last = same(chips);
   past = [];
-  allowance.hold(false);
   // Tell the wheel somebody bet, so that its clock starts now and not at its next look.
   table = await wheelAPI<Table>('/table/placed', true).catch(() => table);
   message('Your bet is in. It rides this spin.');
@@ -427,12 +415,13 @@ async function settle(receipt: GameReceipt) {
 async function place() {
   const stake = total();
   if (!table?.spin) throw new Error('The wheel is not ready. Try again in a moment.');
-  const current = BigInt((await HookedIn.allowance()).allowance);
-  if (stake > current) {
-    const answer = await HookedIn.requestAllowance({ amount: stake - current });
-    allowance.update(answer);
-    if (BigInt(answer.allowance) < stake)
-      throw new Error('Allow this game more ETH to cover these chips, or deposit if your balance is empty.');
+  // Every bet here is a developer bet, which the player allows apart from the casino's.
+  const current = await HookedIn.allowance(),
+    short = stake - BigInt(current.allowance);
+  if (short > 0n || !current.developerBets) {
+    const answer = await HookedIn.requestAllowance({ amount: short > 0n ? short : undefined, developerBets: true });
+    if (BigInt(answer.allowance) < stake || !answer.developerBets)
+      throw new Error('Allow this game to bet these chips with its developer, or deposit if your balance is empty.');
   }
   saved = {
     id: crypto.randomUUID(),
@@ -447,7 +436,6 @@ async function place() {
  * collected what it was paid, when the wallet sends the settled receipt. */
 async function ask() {
   const { id, stake, spin, chips } = saved!;
-  allowance.hold(true);
   try {
     await settle(await HookedIn.developerBet({ id, stake, group: spin, meta: { chips } }));
   } catch (error) {
@@ -455,7 +443,6 @@ async function ask() {
     if (!saved!.placed && !(await HookedIn.allowance()).pending) {
       saved = null;
       persist();
-      allowance.hold(false);
     }
     throw error;
   }
@@ -499,7 +486,6 @@ async function watch() {
     try {
       if (saved && !saved.placed && !working && !spinning) await act(ask);
       else if (saved?.placed && table!.spin !== saved.spin && !spinning && !landing) {
-        allowance.hold(true);
         const receipt = await HookedIn.receipt(saved.id);
         if (receipt?.status === 'settled') void settle(receipt);
       }
@@ -515,7 +501,6 @@ async function start() {
       state = await HookedIn.allowance();
     unit = BigInt(info.recommendedStake);
     scope = HookedIn.storageScope(info);
-    allowance.update(state);
     saved = JSON.parse(localStorage.getItem(scope) ?? 'null');
     ready = true;
     // A developer bet's settled receipt arrives by itself once the wallet has collected it.

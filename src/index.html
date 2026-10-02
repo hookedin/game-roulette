@@ -10,20 +10,11 @@
   </head>
   <body>
     <main>
-      <header class="game-head">
-        <div>
-          <div class="eyebrow">HOOKEDIN ORIGINALS</div>
-          <div class="game-title">
-            <h1>Roulette</h1>
-            <span class="edition">ONE WHEEL, EVERY PLAYER</span>
-          </div>
-        </div>
-        <div class="head-note"><span class="live-dot"></span><span id="players">Connecting to the wheel…</span></div>
-      </header>
-      <div id="allowance" class="allowance" data-state="connecting"></div>
       <section class="stage table" id="table" aria-label="Table">
         <div class="table-top">
-          <div class="stage-meta" id="phase">Place your bets</div>
+          <div class="stage-meta">
+            <span id="phase">Place your bets</span> · <span id="players">Connecting to the wheel…</span>
+          </div>
           <div class="stage-badge" id="clock">Connecting…</div>
           <ol class="history" id="history" aria-label="Recent numbers, newest first"></ol>
         </div>
@@ -50,9 +41,6 @@
         </section>
       </div>
       <footer class="foot">
-        <div class="foot-note">
-          A sandboxed game by HookedIn Studio.<br />Your funds stay in the independent client.
-        </div>
         <details class="rules">
           <summary>How to play</summary>
           <p>
