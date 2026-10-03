@@ -4,8 +4,8 @@ import { keccak256 } from 'ethers';
 import { betPayout, outcome, seedHash } from '@hookedin/play/sdk/outcome';
 import { priceSteps, stepOutcome, stepsCash } from '@hookedin/play/sdk/steps';
 import type { Developer, PublicDeveloperBet, Round } from '@hookedin/play/sdk/developer';
-import { BETTING_MS, Wheel } from '../server/wheel.ts';
-import type { Spin, WheelState } from '../server/wheel.ts';
+import { BETTING_MS, HEARTBEAT_MS, RETRY_MS, Wheel } from '../server/wheel.ts';
+import type { Spin, TableView, WheelState } from '../server/wheel.ts';
 import { ORDER, coveredHash, owedOn, payouts, spinId, stepOf, wireChips } from '../src/table.ts';
 import type { Chips } from '../src/table.ts';
 
@@ -19,7 +19,11 @@ function table(first = 0) {
     failing: any = null,
     lose = false,
     decline = false,
-    bank = 0n;
+    failRead = false,
+    watching = false,
+    looks = 0,
+    bank = 0n,
+    placed = () => {};
   // The developer's rounds, each the hash of a secret, and the seed of its casino bet on it.
   const secret = (n: number) => keccak256('0x' + n.toString(16).padStart(64, '0')),
     seedOf = (id: string) => keccak256(id),
@@ -37,11 +41,14 @@ function table(first = 0) {
     });
   };
   const open = new Map<string, PublicDeveloperBet>(),
+    // Where each bet is in the order the casino took them.
+    order = new Map<string, number>(),
     paid = new Map<string, bigint>(),
     calls: string[] = [],
     saves: WheelState[] = [],
     spins = new Map<string, Spin>(),
-    wakes: number[] = [];
+    wakes: number[] = [],
+    shown: TableView[] = [];
   /** The developer's casino bet on its round, or a reveal: taken from its bank when the bankroll takes it. */
   const place = async ({ round: id, stake, chance, prize, group, meta }: any) => {
     calls.push(stake === '0' ? 'reveal' : 'casinoBet');
@@ -77,13 +84,28 @@ function table(first = 0) {
     seedHash: async (id: string) => seedHash(seedOf(id)),
     virtualBankroll: async () => VIRTUAL_BANKROLL,
     async round(id: string) {
+      looks++;
       // A round the casino never named, or lost with its row, is unknown to it.
       if (!rounds.has(id)) throw Object.assign(new Error('Unknown round'), { status: 404 });
       return view(id);
     },
-    async bets() {
-      calls.push('bets');
-      return { bets: structuredClone([...open.values()]), cursor: '', more: false };
+    // Open bets in the order they were placed, after the cursor; with `wait`, a read with none waits for the next.
+    async bets({ after = '', wait = 0 }: { after?: string; wait?: number } = {}) {
+      calls.push(`bets after ${after || "''"}${wait ? ' waiting' : ''}`);
+      if (failRead) {
+        failRead = false;
+        throw new Error('Casino unavailable');
+      }
+      const page = () => {
+        const bets = [...open.values()].filter(bet => order.get(bet.bet)! > Number(after || '0'));
+        return {
+          bets: structuredClone(bets),
+          cursor: String(bets.length ? order.get(bets.at(-1)!.bet) : after || '0'),
+          more: false,
+        };
+      };
+      if (wait && !page().bets.length) await new Promise<void>(resolve => (placed = resolve));
+      return page();
     },
     casinoBet: (bet: any) =>
       place({ ...bet, stake: String(bet.stake), chance: String(bet.chance), prize: String(bet.prize) }),
@@ -104,6 +126,8 @@ function table(first = 0) {
     keep: (spin: Spin) => void spins.set(spin.id, structuredClone(spin)),
     kept: (id: string) => spins.get(id) ?? null,
     wake: (at: number) => void wakes.push(at),
+    show: (view: TableView) => void shown.push(view),
+    watched: () => watching,
   };
   const wheel = new Wheel(deps);
   const x = {
@@ -113,7 +137,21 @@ function table(first = 0) {
     saves,
     rounds,
     wakes,
+    shown,
     wheel,
+    /** How often the wheel asked the casino about a round. */
+    looks: () => looks,
+    /** Whether a page watches the table. One that stops watching ends a read the wheel is waiting on. */
+    watch: (value: boolean) => {
+      watching = value;
+      if (!value) placed();
+    },
+    /** The casino answers the read the wheel is waiting on, with no bet: another wait on the game began. */
+    answer: () => placed(),
+    /** The casino fails the wheel's next read. */
+    failNextRead: () => void (failRead = true),
+    /** The casino reads bets: how often. */
+    reads: () => calls.filter(call => call.startsWith('bets')),
     bank: () => bank,
     /** The developer takes everything out of its bank. */
     empty: () => void (bank = 0n),
@@ -134,7 +172,9 @@ function table(first = 0) {
     } = {}) {
       const hash = '0x' + String(open.size + paid.size + 1).padStart(64, '0');
       open.set(hash, { bet: hash, uname, stake, meta, group: spin, status: 'open', placedAt: now } as any);
+      order.set(hash, order.size + 1);
       bank += BigInt(stake);
+      placed();
       return hash;
     },
     /** The steps of a kept spin as the casino shows them, and the number they walk to, as a page checks them. */
@@ -156,11 +196,11 @@ function table(first = 0) {
     fail: (error: any) => (failing = error),
     loseReplies: (value: boolean) => (lose = value),
     declining: (value: boolean) => (decline = value),
-    /** Spin: wait out the betting time and let the alarm fire. */
+    /** Spin: the wheel reads the bets, then waits out the betting time and lets the alarm fire. */
     async spin() {
-      await wheel.placed();
+      await wheel.read();
       now += BETTING_MS;
-      await wheel.alarm();
+      await wheel.tick();
     },
   };
   return x;
@@ -188,12 +228,13 @@ test('the wheel turns on its clock: an empty turn lands at random on the same sp
   assert.ok(!t.calls.includes('casinoBet') && !t.calls.includes('reveal'), 'no round is revealed');
   assert.equal(await t.wheel.kept(first.spin!), null, 'and nothing is kept');
   assert.deepEqual(t.wakes, [], 'nor is the wheel woken: nobody is in');
-  // A page says its wallet placed a bet; the wheel believes the casino, not the page.
+  // The wheel reads the bets the casino took.
   const layouts: Chips[] = [{ red: 250n }, { '17': 50n }],
     a = t.bet({ uname: 'a', chips: layouts[0] }),
     b = t.bet({ uname: 'a', chips: layouts[1] });
   t.bet({ uname: 'b', spin: 'f'.repeat(64) });
-  const placed = await t.wheel.placed();
+  await t.wheel.read();
+  const placed = await t.wheel.view();
   assert.deepEqual([placed.players, placed.staked], [1, '300'], 'only the bets on its own spin');
   assert.equal(placed.closesAt, empty.closesAt, 'bets do not move the turn');
   assert.equal(t.wakes.at(-1), placed.closesAt, 'which comes on time whether or not anybody asks');
@@ -201,7 +242,7 @@ test('the wheel turns on its clock: an empty turn lands at random on the same sp
   await t.wheel.view();
   assert.ok(!t.calls.includes('casinoBet'), 'not a moment early');
   t.advance(1);
-  await t.wheel.alarm();
+  await t.wheel.tick();
   // Anyone can check the spin: its steps at the casino walk to its number, the first commits to the bets it covered,
   // and each is the round the spin named for its level, on the seed it named.
   const kept = (await t.wheel.kept(first.spin!))!,
@@ -230,11 +271,12 @@ test('a bet that reaches the casino after a turn nobody bet on rides the next tu
   t.advance(BETTING_MS);
   await t.wheel.view();
   // Signed while the turn took bets, it reached the casino after the ball landed.
-  const late = t.bet({ spin: spin! }),
-    placed = await t.wheel.placed();
+  const late = t.bet({ spin: spin! });
+  await t.wheel.read();
+  const placed = await t.wheel.view();
   assert.deepEqual([placed.spin, placed.players], [spin, 1]);
   t.advance(BETTING_MS);
-  await t.wheel.alarm();
+  await t.wheel.tick();
   const kept = (await t.wheel.kept(spin!))!;
   assert.deepEqual(kept.covered, [late]);
   assert.equal(t.paid.get(late), payouts({ red: 100n }).get(kept.number) ?? 0n);
@@ -306,7 +348,7 @@ test('a bet that comes after its spin gets its stake back', async () => {
   // Signed while the spin was open, it reached the casino after it.
   const late = t.bet({ spin: spin! });
   t.advance(1000);
-  await t.wheel.view();
+  await t.wheel.read();
   assert.equal(t.paid.get(late), 100n);
 });
 
@@ -345,13 +387,86 @@ test("a step whose stake the developer's bank cannot pay only reveals its round,
   assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(number) ?? 0n);
 });
 
-test('the casino is asked about bets at most once a second, however many pages are watching', async () => {
+test('however often pages look, the wheel asks the casino nothing: it checks its spin once a start', async () => {
   const t = table();
-  for (let i = 0; i < 20; i++) await t.wheel.view();
-  assert.equal(t.calls.filter(call => call === 'bets').length, 1);
-  t.advance(1000);
-  for (let i = 0; i < 20; i++) await t.wheel.view();
-  assert.equal(t.calls.filter(call => call === 'bets').length, 2);
+  await t.wheel.view();
+  const woken = new Wheel(t.deps, structuredClone(t.saves.at(-1)!));
+  for (let i = 0; i < 20; i++) await woken.view();
+  assert.deepEqual([t.reads().length, t.looks()], [0, 1]);
+});
+
+test('a watching page is shown each change and a heartbeat, and the wheel follows the bets placed while it waits', async () => {
+  const t = table();
+  t.watch(true);
+  await t.wheel.view();
+  assert.equal(t.wakes.at(-1), t.deps.now() + HEARTBEAT_MS, 'a watched wheel wakes for its heartbeat');
+  const shown = t.shown.length;
+  await t.wheel.view();
+  assert.equal(t.shown.length, shown, 'a look changes nothing, so nothing is shown');
+  await t.wheel.tick();
+  assert.equal(t.shown.length, shown + 1, 'the heartbeat shows the table either way');
+  const following = t.wheel.follow();
+  await new Promise(resolve => setTimeout(resolve, 10));
+  t.bet({ uname: 'a' });
+  await new Promise(resolve => setTimeout(resolve, 10));
+  assert.deepEqual([t.shown.at(-1)!.players, t.shown.at(-1)!.staked], [1, '100'], 'the bet is shown as it comes');
+  t.watch(false);
+  await following;
+});
+
+test('a watched table’s heartbeat comes a heartbeat after it was last shown, whatever else asks it meanwhile', async () => {
+  const t = table();
+  t.watch(true);
+  await t.wheel.tick();
+  const shown = t.deps.now();
+  t.advance(2_000);
+  await t.wheel.view();
+  assert.equal(t.wakes.at(-1), shown + HEARTBEAT_MS, 'looks that show nothing do not put it off');
+});
+
+test('a wheel woken with nobody watching reads its bets, so a restarted one takes the turn somebody bet on on time', async () => {
+  const t = table();
+  const { closesAt } = await t.wheel.view();
+  t.bet();
+  const woken = new Wheel(t.deps, structuredClone(t.saves.at(-1)!));
+  await woken.tick();
+  assert.equal(t.wakes.at(-1), closesAt, 'it knows the table only the casino told it of');
+});
+
+test('a wheel whose spin the casino lost, as after a restore of its records, moves on and gives the bets on it back', async () => {
+  const t = table();
+  const { spin } = await t.wheel.view();
+  const a = t.bet();
+  await t.wheel.read();
+  for (const round of t.saves.at(-1)!.spin!.rounds) t.rounds.delete(round);
+  t.advance(BETTING_MS);
+  await assert.rejects(t.wheel.tick(), /Unknown round/);
+  t.advance(RETRY_MS);
+  await t.wheel.tick();
+  assert.notEqual((await t.wheel.view()).spin, spin);
+  await t.wheel.read();
+  assert.equal(t.paid.get(a), 100n);
+});
+
+test('a follower whose wait comes back empty early backs off, and after a failed read starts from the oldest open bet', async t => {
+  t.mock.method(console, 'error', () => {});
+  const x = table(),
+    pause = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  x.watch(true);
+  await x.wheel.view();
+  x.bet();
+  const following = x.wheel.follow();
+  await pause(20);
+  assert.equal(x.reads().at(-1), 'bets after 1 waiting', 'it waits on from the bet it read');
+  const reads = x.reads().length;
+  x.answer();
+  await pause(100);
+  assert.equal(x.reads().length, reads, 'another server took the wait: it backs off before asking again');
+  x.failNextRead();
+  await pause(2 * RETRY_MS + 200);
+  assert.deepEqual(x.reads().slice(reads), ['bets after 1 waiting', "bets after '' waiting", 'bets after 1 waiting']);
+  x.watch(false);
+  await following;
 });
 
 test('a failed walk is tried again with the bets it saved, and takes each step once', async () => {
@@ -364,7 +479,7 @@ test('a failed walk is tried again with the bets it saved, and takes each step o
   assert.deepEqual(t.saves.at(-1)!.walk!.covered, bets, 'the bets it covers are saved before its first step');
   const late = t.bet({ uname: 'late' });
   t.fail(null);
-  await t.wheel.alarm();
+  await t.wheel.tick();
   const kept = (await t.wheel.kept(spin!))!;
   assert.deepEqual(kept.covered, bets, 'a bet that came meanwhile is not covered');
   assert.equal(t.paid.get(late), 100n);
@@ -382,11 +497,15 @@ test('a step whose reply was lost is found on its round, even after a restart', 
   // round, and walks on from there.
   const woken = new Wheel(t.deps, structuredClone(t.saves.at(-1)!));
   t.advance(1000);
-  await woken.alarm();
+  await woken.tick();
   const kept = (await woken.kept(spin!))!;
   assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(kept.number) ?? 0n);
   assert.equal(t.walked(kept).number, kept.number);
-  assert.equal(t.calls.filter(call => call !== 'bets').length, t.walked(kept).steps.length, 'each step placed once');
+  assert.equal(
+    t.calls.filter(call => !call.startsWith('bets')).length,
+    t.walked(kept).steps.length,
+    'each step placed once',
+  );
 });
 
 test('a wheel whose saved spin the casino does not know moves on to a new one', async () => {

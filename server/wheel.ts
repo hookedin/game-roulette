@@ -17,7 +17,9 @@
  * back, and keeps the spin for anyone to check. A turn nobody laid a layout on has nothing riding on it: the ball lands
  * on a pocket drawn at random, nothing is walked, and the spin's rounds, still unrevealed, take the next turn's bets.
  * So an empty table costs the casino nothing, and wakes nobody: whoever looks next finds the turn the clock has come
- * to. Everything that touches the outside world is handed in, so the same wheel runs in a Worker or a test.
+ * to. While a page watches, the wheel follows the casino's bets as they are placed, and shows every watching page the
+ * table as it changes. Everything that touches the outside world is handed in, so the same wheel runs in a Worker or a
+ * test.
  */
 import type { Developer, PublicDeveloperBet, Round } from '@hookedin/play/sdk/developer';
 import { levels, next, priceSteps, stepBet } from '@hookedin/play/sdk/steps';
@@ -55,6 +57,16 @@ export interface WheelState {
   /** The last turns' landings, newest first. */
   landed: Landing[];
 }
+/** What a page shows: the spin to bet on, when the wheel turns, by the wheel's clock, who is at the table, and where it
+ * last landed. */
+export interface TableView {
+  spin: string | null;
+  closesAt: number | null;
+  now: number;
+  players: number;
+  staked: string;
+  landed: Landing[];
+}
 interface Deps {
   developer: Developer;
   now(): number;
@@ -62,14 +74,21 @@ interface Deps {
   /** Keep a spin for anyone to check, and read one back by its ID. */
   keep(spin: Spin): void | Promise<void>;
   kept(id: string): Spin | null | undefined | Promise<Spin | null | undefined>;
-  /** Ask for `alarm()` at this time. */
+  /** Ask for `tick()` at this time. */
   wake(at: number): void;
+  /** Shows every watching page the table as it stands. */
+  show(view: TableView): void;
+  /** Whether any page is watching. */
+  watched(): boolean;
 }
 /** How long each turn takes bets. */
 export const BETTING_MS = 20_000;
-/** How soon a walk or an alarm that failed is tried again. */
+/** How soon a walk, a read or an alarm that failed is tried again. */
 export const RETRY_MS = 5_000;
-const LOOK_MS = 1_000;
+/** How often a watched table shows itself when nothing changes, so that its pages know they still hear it. */
+export const HEARTBEAT_MS = 3_000;
+/** How long the casino holds a read of new bets until one is placed, in seconds. */
+const WAIT_S = 25;
 /** What a bet on a spin is owed: what its chips pay on the number if the walk covered it, and its stake back
  * otherwise, as for a bet on a spin the wheel never walked. */
 function owed(bet: PublicDeveloperBet, spin: Spin | null | undefined) {
@@ -80,8 +99,16 @@ function owed(bet: PublicDeveloperBet, spin: Spin | null | undefined) {
 export class Wheel {
   readonly deps: Deps;
   state: WheelState;
-  /** The open bets on the table's spin, as the casino had them when the wheel last looked. */
-  private table: { at: number; open: PublicDeveloperBet[] } = { at: 0, open: [] };
+  /** The open bets on the table's spin, by hash, as the wheel has read them from the casino. */
+  private table = new Map<string, PublicDeveloperBet>();
+  /** Where the wheel has read the casino's bets up to. A wheel starts from the oldest open bet. */
+  private cursor = '';
+  /** Whether the casino knows the table's spin: asked once a start, and again once a walk finds a round of it unknown. */
+  private checked = false;
+  private following = false;
+  /** The table as the pages last saw it, but for its clock, and when. */
+  private shown = '';
+  private shownAt = -Infinity;
   private queue: Promise<unknown> = Promise.resolve();
   constructor(deps: Deps, saved?: WheelState) {
     this.deps = deps;
@@ -98,44 +125,109 @@ export class Wheel {
     this.queue = result.catch(() => {});
     return result;
   }
-  /** What a page shows: the spin to bet on, who is at the table, when the wheel turns, and where it last landed. */
+  /** The table as a page shows it. */
+  private tableView(): TableView {
+    const open = [...this.table.values()];
+    return {
+      spin: this.state.spin?.id ?? null,
+      closesAt: this.state.closesAt,
+      now: this.deps.now(),
+      players: new Set(open.map(bet => bet.uname)).size,
+      staked: String(open.reduce((sum, bet) => sum + BigInt(bet.stake), 0n)),
+      landed: this.state.landed,
+    };
+  }
+  /** Shows every watching page the table if it changed since they last saw it, or with `always`, either way. Then the
+   * wheel asks to be woken for the turn, if somebody is at the table, and while a page watches, a heartbeat after the
+   * table was last shown. */
+  private publish(always = false) {
+    const view = this.tableView(),
+      shown = JSON.stringify({ ...view, now: 0 });
+    if (shown !== this.shown || always) {
+      this.shown = shown;
+      this.shownAt = view.now;
+      this.deps.show(view);
+    }
+    const watched = this.deps.watched(),
+      turn = this.state.closesAt!;
+    if (this.table.size || watched)
+      this.deps.wake(watched ? Math.min(turn, Math.max(this.shownAt + HEARTBEAT_MS, view.now)) : turn);
+  }
+  /** What a page shows, once the wheel has come up to its clock. */
   view() {
     return this.serialized(async () => {
       await this.turn();
-      const { open } = this.table;
-      return {
-        spin: this.state.spin?.id ?? null,
-        closesAt: this.state.closesAt,
-        now: this.deps.now(),
-        players: new Set(open.map(bet => bet.uname)).size,
-        staked: String(open.reduce((sum, bet) => sum + BigInt(bet.stake), 0n)),
-        landed: this.state.landed,
-      };
+      this.publish();
+      return this.tableView();
     });
   }
-  /** A page says its wallet placed a bet; the casino is asked, since a page can say anything. */
-  placed() {
-    this.table.at = 0;
-    return this.view();
-  }
-  alarm() {
-    return this.serialized(() => this.turn());
+  /** The wheel's alarm: the turn is taken once it is due, and every watching page is shown the table. A wheel nobody
+   * watches reads its bets first, since after a restart only the casino knows who is at the table. */
+  async tick() {
+    if (!this.following) await this.read();
+    await this.serialized(async () => {
+      await this.turn();
+      this.publish(true);
+    });
   }
   /** A spin the wheel kept, for anyone to check. */
   kept(id: string) {
     return this.deps.kept(id.toLowerCase());
   }
-  /** The turn is taken once it is due, and the next one opens at once. A table somebody is at wakes the wheel on time
-   * whether or not anybody is watching. */
-  private async turn() {
-    const now = this.deps.now(),
-      due = () => this.state.closesAt !== null && now >= this.state.closesAt;
-    await this.look(now, due());
-    if (due()) {
-      await this.spin();
-      await this.look(now, false);
+  /** While a page watches, the wheel follows the casino's bets: the casino holds each read until a bet on the game is
+   * placed, so each joins the table as it comes. */
+  async follow() {
+    if (this.following) return;
+    this.following = true;
+    try {
+      while (this.deps.watched()) {
+        const asked = Date.now();
+        try {
+          // An empty page long before the wait is up means another server took the game's wait: both back off,
+          // rather than answer each other's waits as fast as the network goes.
+          if ((await this.read(WAIT_S)) || Date.now() - asked > (WAIT_S * 1000) / 2) continue;
+        } catch (error: any) {
+          console.error('Wheel bets:', error.message);
+          // Again from the oldest open bet: the casino may have been away, or restored its records.
+          this.cursor = '';
+        }
+        await new Promise(resolve => setTimeout(resolve, RETRY_MS));
+      }
+    } finally {
+      this.following = false;
     }
-    if (this.table.open.length) this.deps.wake(this.state.closesAt!);
+  }
+  /** The bets placed since the wheel last read, a page of them, waiting up to `wait` seconds for one. A bet on the
+   * table's spin joins the table. Any other is what a walk left behind, or came too late for it, or is no bet on this
+   * wheel at all: it is settled now, from its spin if the wheel kept one, and with its stake back if not. The cursor
+   * moves on once they are taken, so a bet that could not be settled is read again. Resolves with how many it read. */
+  async read(wait = 0) {
+    const from = this.cursor,
+      page = await this.deps.developer.bets({ after: from, wait });
+    await this.serialized(async () => {
+      await this.turn();
+      const id = this.state.spin!.id;
+      for (const bet of page.bets) if (bet.group === id) this.table.set(bet.bet, bet);
+      for (const other of new Set(page.bets.map(bet => bet.group ?? '').filter(group => group !== id)))
+        await this.settle(
+          await this.deps.kept(other),
+          page.bets.filter(bet => (bet.group ?? '') === other),
+        );
+      this.publish();
+    });
+    // Unless the wheel moved to a new spin meanwhile, and starts again from the oldest open bet.
+    if (this.cursor === from) this.cursor = page.cursor;
+    return page.bets.length;
+  }
+  /** The turn is taken once it is due, and the next one opens at once. A table somebody is at wakes the wheel on time
+   * whether or not anybody is watching (`publish` asks for it). */
+  private async turn() {
+    const now = this.deps.now();
+    await this.open(now);
+    if (now >= this.state.closesAt!) {
+      await this.spin();
+      await this.open(now);
+    }
   }
   /** Every open developer bet of the game, a page at a time, in the order they were placed. */
   private async openDeveloperBets() {
@@ -143,44 +235,37 @@ export class Wheel {
     for (let after = ''; ;) {
       const page = await this.deps.developer.bets({ status: 'open', after });
       bets.push(...page.bets);
-      if (!page.more) break;
+      if (!page.more) return bets;
       after = page.cursor;
     }
-    return bets.sort((a, b) => a.placedAt - b.placedAt);
   }
-  /** The table's spin and its open bets, as the casino has them: asked at most once a second, and always before a
-   * walk. A spin whose first round the casino does not know, lost with its row or another deployment's, makes way for
-   * a new one, and a spin with no turn to come gets the next. An open bet in any other group is what a walk left
-   * behind, or came too late for it, or is no bet on this wheel at all: it is settled now, from its spin if the wheel
-   * kept one, and with its stake back if not. */
-  private async look(now: number, always: boolean) {
-    if (now - this.table.at < LOOK_MS && !always) return;
+  /** The table's spin. A spin whose first round the casino does not know, lost with its row or another deployment's,
+   * makes way for a new one; a spin with no turn to come gets the next. */
+  private async open(now: number) {
     const { developer } = this.deps;
-    const known =
-      this.state.spin &&
-      (await developer.round(this.state.spin.rounds[0]!).catch((error: any) => {
+    if (this.state.spin && !this.checked) {
+      const known = await developer.round(this.state.spin.rounds[0]!).catch((error: any) => {
         if (error.status === 404) return null;
         throw error;
-      }));
-    if (!known) {
+      });
+      // The bets on it are read again, and given their stakes back.
+      if (!known) {
+        this.state = { ...this.state, spin: null, walk: null };
+        this.cursor = '';
+      }
+    }
+    this.checked = true;
+    if (this.state.spin && this.state.closesAt !== null) return;
+    if (!this.state.spin) {
       const rounds: string[] = [];
       for (let level = 0; level < levels(ORDER.length); level++) rounds.push((await developer.openRound()).id);
       // The seeds are derived from the developer's key and the rounds, so their hashes are worked out, never stored.
       const seedHashes = await Promise.all(rounds.map(round => developer.seedHash(round)));
       this.state = { ...this.state, spin: { id: spinId(rounds, seedHashes), rounds, seedHashes }, walk: null };
+      this.table.clear();
     }
-    if (!known || this.state.closesAt === null) {
-      this.state = { ...this.state, closesAt: now + BETTING_MS };
-      await this.deps.save(this.state);
-    }
-    const bets = await this.openDeveloperBets(),
-      id = this.state.spin!.id;
-    for (const other of new Set(bets.map(bet => bet.group ?? '').filter(group => group !== id)))
-      await this.settle(
-        await this.deps.kept(other),
-        bets.filter(bet => (bet.group ?? '') === other),
-      );
-    this.table = { at: now, open: bets.filter(bet => bet.group === id) };
+    this.state = { ...this.state, closesAt: now + BETTING_MS };
+    await this.deps.save(this.state);
   }
   /** The walk. What the wheel owes on each pocket, the bets it covers and the bankroll it is priced against are saved
    * before its first step, and each step is placed on the spin's round for its level, so a walk tried again places
@@ -223,8 +308,10 @@ export class Wheel {
       await this.deps.keep(kept);
       await this.settle(kept, bets);
       await this.land(kept.number, kept.id);
-    } catch (error) {
-      // Tried again shortly; the same spin, rounds and bets make it the same walk.
+    } catch (error: any) {
+      // Tried again shortly; the same spin, rounds and bets make it the same walk. A round the casino does not know,
+      // as after a restore of its records, sends the wheel to ask about its spin again.
+      if (error.status === 404) this.checked = false;
       this.deps.wake(this.deps.now() + RETRY_MS);
       throw error;
     }
@@ -239,7 +326,8 @@ export class Wheel {
       landed: [{ at: this.deps.now(), number, spin: walked }, ...this.state.landed].slice(0, 12),
     };
     await this.deps.save(this.state);
-    this.table = { at: 0, open: [] };
+    // Every bet on the spin the wheel had read is settled.
+    this.table.clear();
   }
   /** One level of the walk on its round: its casino bet, in the spin's group with its side in its meta, or a reveal of
    * the round when it bets nothing or its bank cannot pay the stake. A round revealed already is the step as it was

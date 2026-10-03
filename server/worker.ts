@@ -5,7 +5,7 @@
  */
 import { createDeveloper } from '@hookedin/play/sdk/developer';
 import { RETRY_MS, Wheel } from './wheel.ts';
-import type { Spin, WheelState } from './wheel.ts';
+import type { Spin, TableView, WheelState } from './wheel.ts';
 
 interface Env {
   ASSETS: Fetcher;
@@ -18,9 +18,14 @@ interface Env {
    * casino bets and settles the game's developer bets. A secret. */
   DEVELOPER_KEY: string;
 }
+const encoder = new TextEncoder();
+/** How many events a page may fall behind by before it is dropped; it connects again. */
+const MAX_BEHIND = 16;
 
 export class RouletteWheel implements DurableObject {
   private wheel: Promise<Wheel> | null = null;
+  /** Every page watching: the stream of server-sent events it reads. */
+  private readonly pages = new Set<WritableStreamDefaultWriter<Uint8Array>>();
   readonly ctx: DurableObjectState;
   readonly env: Env;
   constructor(ctx: DurableObjectState, env: Env) {
@@ -43,6 +48,8 @@ export class RouletteWheel implements DurableObject {
           keep: spin => this.ctx.storage.put(`spin:${spin.id}`, spin),
           kept: id => this.ctx.storage.get<Spin>(`spin:${id}`),
           wake: at => void this.ctx.storage.setAlarm(at),
+          show: view => this.send(view, this.pages),
+          watched: () => this.pages.size > 0,
         },
         await this.ctx.storage.get<WheelState>('state'),
       ))().catch(error => {
@@ -50,12 +57,37 @@ export class RouletteWheel implements DurableObject {
       throw error;
     }));
   }
+  /** The table as an event to `pages`. A page that has fallen too far behind, or gone, is dropped. */
+  private send(view: TableView, pages: Iterable<WritableStreamDefaultWriter<Uint8Array>>) {
+    const event = encoder.encode(`data: ${JSON.stringify(view)}\n\n`);
+    for (const page of pages) {
+      if (page.desiredSize === null || page.desiredSize < -MAX_BEHIND) {
+        this.pages.delete(page);
+        page.abort().catch(() => {});
+      } else page.write(event).catch(() => this.pages.delete(page));
+    }
+  }
+  /** A page watches the table: the table as it stands, then every change, and the wheel follows the casino's bets. */
+  private async watch(wheel: Wheel) {
+    const { readable, writable } = new TransformStream<Uint8Array, Uint8Array>(),
+      page = writable.getWriter();
+    page.closed.catch(() => {}).finally(() => this.pages.delete(page));
+    void page.write(encoder.encode('retry: 1000\n\n')).catch(() => {});
+    this.pages.add(page);
+    try {
+      this.send(await wheel.view(), [page]);
+    } catch (error) {
+      this.pages.delete(page);
+      throw error;
+    }
+    void wheel.follow();
+    return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' } });
+  }
   async fetch(request: Request) {
     const url = new URL(request.url);
     try {
       const wheel = await this.open();
-      if (url.pathname === '/api/table' && request.method === 'GET') return Response.json(await wheel.view());
-      if (url.pathname === '/api/table/placed' && request.method === 'POST') return Response.json(await wheel.placed());
+      if (url.pathname === '/api/live' && request.method === 'GET') return await this.watch(wheel);
       // Every spin the wheel kept, with its rounds and the bets its walk covered, for anyone to check.
       const spin = /^\/api\/spins\/([0-9a-fA-F]{64})$/.exec(url.pathname);
       if (spin && request.method === 'GET') {
@@ -67,11 +99,14 @@ export class RouletteWheel implements DurableObject {
       return Response.json({ error: error.message || 'The wheel is unavailable' }, { status: 503 });
     }
   }
-  /** A turn somebody bet on is taken on time whether or not anybody is watching. An alarm that fails, opening the
-   * wheel or reading the casino, tries again shortly: nothing else wakes a table nobody is watching. */
+  /** A turn somebody bet on is taken on time whether or not anybody is watching, and a watched table shows itself.
+   * An alarm that fails, opening the wheel or reading the casino, tries again shortly: nothing else wakes a table
+   * nobody is watching. */
   async alarm() {
     try {
-      await (await this.open()).alarm();
+      const wheel = await this.open();
+      if (this.pages.size) void wheel.follow();
+      await wheel.tick();
     } catch (error: any) {
       console.error('Wheel alarm:', error.message);
       await this.ctx.storage.setAlarm(Date.now() + RETRY_MS);

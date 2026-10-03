@@ -9,7 +9,7 @@ import { next, stepOutcome } from '@hookedin/play/sdk/steps';
 import type { GameReceipt } from '@hookedin/play/sdk/sdk';
 import { ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf, wireChips } from './table.ts';
 import type { Chips } from './table.ts';
-import type { Landing, Spin } from '../server/wheel.ts';
+import type { Spin, TableView } from '../server/wheel.ts';
 import { mountWheel } from './wheel-view.ts';
 
 /** A bet the wallet was asked to sign, saved first so that a reload finds its result under the same name. */
@@ -22,17 +22,10 @@ interface Saved {
   /** The wallet signed it and its stake is with the developer: it rides its spin, and cannot be taken back. */
   placed?: boolean;
 }
-interface Table {
-  /** The spin the table takes bets on. */
-  spin: string | null;
-  closesAt: number | null;
-  now: number;
-  players: number;
-  staked: string;
-  /** The last turns' landings, newest first. */
-  landed: Landing[];
-}
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
+/** The wheel shows the table every few seconds when nothing changes: a page that hears nothing for longer has lost
+ * it. */
+const STALE_MS = 7_000;
 /** Too late for this spin: the wheel is about to spin, and a bet now would come too late for it and come back. */
 const LAST_CALL_MS = 3000;
 /** The rack's chips, each so many of the wallet's recommended stake. */
@@ -65,7 +58,13 @@ let scope = '',
   /** The chips of the last bet placed: the board holds them again, to bet again. */
   last = '',
   saved: Saved | null = null,
-  table: Table | null = null,
+  table: TableView | null = null,
+  /** When the page last heard from the wheel, and asked the wallet about its bet. */
+  heard = -Infinity,
+  askedAt = -Infinity,
+  /** The wheel's events, and when the page last connected to them. */
+  source: EventSource | null = null,
+  connectedAt = -Infinity,
   /** When the newest landing the table showed was, or null before the first look. */
   seen: number | null = null,
   /** The server's clock minus this page's. */
@@ -96,13 +95,6 @@ const short = (units: number) =>
  * the wheel turns. */
 const locked = () => !ready || working || Boolean(rolling) || spinning || Boolean(saved);
 const idle = () => `Pick a chip and tap the board. Chip 1 is ${eth(unit)}.`;
-/** The wheel, this page's own server. A reply that cannot be read is the wheel being away. */
-async function wheelAPI<T = Table>(path: string, post = false): Promise<T> {
-  const response = await fetch(`./api${path}`, post ? { method: 'POST', body: '{}' } : {}),
-    value = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(value.error || 'The wheel is offline.');
-  return value;
-}
 
 // --- The board ----------------------------------------------------------------------------
 
@@ -407,8 +399,6 @@ async function settle(receipt: GameReceipt) {
   persist();
   last = same(chips);
   past = [];
-  // Tell the wheel somebody bet, so that its clock starts now and not at its next look.
-  table = await wheelAPI<Table>('/table/placed', true).catch(() => table);
   message('Your bet is in. It rides this spin.');
   render();
 }
@@ -463,38 +453,54 @@ async function act(work: () => Promise<void>) {
 
 // --- The table ---------------------------------------------------------------------------
 
-async function watch() {
-  try {
-    table = await wheelAPI<Table>('/table');
-    skew = table.now - Date.now();
-    if (offline && !saved && ready) message(idle());
-    offline = false;
-    // A new landing: the wheel turns to it, unless the player's own bet rode it, which lands below. The first look
-    // fills the strip with the landings the table has seen.
-    const newest = table.landed[0];
-    if (seen === null) for (const { number } of table.landed.toReversed()) remember(number);
-    else if (newest && newest.at > seen && !(saved?.placed && newest.spin === saved.spin)) void watched(newest.number);
-    seen = newest?.at ?? 0;
-  } catch (error: any) {
-    if (!offline && !saved) message(`${error.message} The table opens when it is back.`, true);
-    offline = true;
-  }
+/** The table as the wheel shows it: each change, and every few seconds. */
+async function hear(next: TableView) {
+  table = next;
+  heard = performance.now();
+  skew = table.now - Date.now();
+  if (offline && !saved && ready) message(idle());
+  offline = false;
+  // A new landing: the wheel turns to it, unless the player's own bet rode it, which lands below. The first look
+  // fills the strip with the landings the table has seen.
+  const newest = table.landed[0];
+  if (seen === null) for (const { number } of table.landed.toReversed()) remember(number);
+  else if (newest && newest.at > seen && !(saved?.placed && newest.spin === saved.spin)) void watched(newest.number);
+  seen = newest?.at ?? 0;
   // The wallet has yet to answer for the bet: ask again. Once the table has moved on from its spin, ask the wallet
   // about it, so it collects the bet at once; the settled receipt arrives by itself, and is here already if it was
   // collected.
-  if (!offline)
-    try {
-      if (saved && !saved.placed && !working && !spinning) await act(ask);
-      else if (saved?.placed && table!.spin !== saved.spin && !spinning && !landing) {
-        const receipt = await HookedIn.receipt(saved.id);
-        if (receipt?.status === 'settled') void settle(receipt);
-      }
-    } catch (error: any) {
-      if (!saved) message(error.message, true);
+  try {
+    if (saved && !saved.placed && !working && !spinning) await act(ask);
+    else if (
+      saved?.placed &&
+      table.spin !== saved.spin &&
+      !spinning &&
+      !landing &&
+      performance.now() - askedAt > 3_000
+    ) {
+      askedAt = performance.now();
+      const receipt = await HookedIn.receipt(saved.id);
+      if (receipt?.status === 'settled') void settle(receipt);
     }
+  } catch (error: any) {
+    if (!saved) message(error.message, true);
+  }
   render();
-  setTimeout(watch, 1000);
 }
+/** The wheel's events, from this page's own server. A page that hears nothing for a while connects again. */
+function connect() {
+  source?.close();
+  connectedAt = performance.now();
+  source = new EventSource('./api/live');
+  source.onmessage = event => void hear(JSON.parse(event.data));
+}
+setInterval(() => {
+  if (performance.now() - Math.max(heard, connectedAt) < STALE_MS) return;
+  if (!offline && !saved) message('The wheel is offline. The table opens when it is back.', true);
+  offline = true;
+  render();
+  connect();
+}, 1_000);
 async function start() {
   try {
     const info = await HookedIn.info(),
@@ -572,5 +578,5 @@ addEventListener('keydown', event => {
 $('wheel-box').addEventListener('click', () => spotlight(false));
 render();
 setInterval(tick, 250);
-void watch();
+connect();
 void start();
