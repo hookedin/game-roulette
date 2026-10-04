@@ -502,6 +502,13 @@ setInterval(() => {
   connect();
 }, 1_000);
 async function start() {
+  // Every bet here is a developer bet: the player allows them in the dialog the wallet offers as the game opens, not
+  // while a spin takes bets.
+  void HookedIn.allowance()
+    .then(async current => {
+      if (!current.developerBets) await HookedIn.requestAllowance({ developerBets: true });
+    })
+    .catch(() => {});
   try {
     const info = await HookedIn.info(),
       state = await HookedIn.allowance();
