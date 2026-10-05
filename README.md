@@ -91,7 +91,7 @@ You earn half of the commission on the wheel's casino bets. It accrues to the ac
 
 1. Under **Settings → Secrets and variables → Actions**, add the secret `CLOUDFLARE_API_TOKEN` (from Cloudflare's **Edit Cloudflare Workers** template) and the variable `CLOUDFLARE_ACCOUNT_ID`.
 2. Once, give the Worker the key of the account the game is published from: `npx wrangler secret put DEVELOPER_KEY`. The Worker then holds everything that account holds: its games, their commission and its bank. When the casino's bankroll is large beside the table, the bank needs no money of its own: the stakes of the bets the wheel covers pay for the walk, and what its steps pay pays the winners. Against a small bankroll a walk costs more than the stakes, and a step the bank cannot pay is carried by the bank itself.
-3. Push to `main`: [Deploy](.github/workflows/deploy.yml) type-checks, tests, builds and publishes the Worker, which keeps its `DEVELOPER_KEY` from one deploy to the next. `@hookedin/play`, which carries the SDK and the casino's protocol, is play's newest `main` at every build, and play's release runs this workflow whenever its `main` moves.
+3. Push to `main`: [Deploy](.github/workflows/deploy.yml) type-checks, tests, builds and publishes the Worker, which keeps its `DEVELOPER_KEY` from one deploy to the next. `@hookedin/play`, which carries the SDK and the casino's protocol, is play's newest `main` at every build; a build on `main` commits the lockfile it tested, and play's release runs this workflow whenever its `main` moves.
 
 `npx wrangler deploy` publishes it by hand; `wrangler.jsonc` builds the page first.
 
