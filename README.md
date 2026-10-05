@@ -99,7 +99,7 @@ The build writes `dist/_headers`, which Cloudflare applies by itself: the page's
 
 ## Get listed
 
-Publish it yourself: in the wallet of the account whose key the Worker holds, open **My games** and give the game its name, `GAME_NAME`, and its URL. It is then at `@<your name>/<game name>` for anyone with a wallet. The library the casino ships with is what `@hookedin` publishes, from [catalog.json](https://github.com/hookedin/play/blob/main/catalog.json) in play; open an issue or a pull request there to be in it.
+Publish it yourself: in the wallet of the account whose key the Worker holds, open **Developer** and give the game its name, `GAME_NAME`, and its URL. It is then at `@<your name>/<game name>` for anyone with a wallet. The library the casino ships with is what `@hookedin` publishes, from [catalog.json](https://github.com/hookedin/play/blob/main/catalog.json) in play; open an issue or a pull request there to be in it.
 
 ## Tests
 
