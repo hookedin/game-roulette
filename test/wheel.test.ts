@@ -28,13 +28,14 @@ function table(first = 0) {
   // The developer's rounds, each the hash of a secret, and the seed of its casino bet on it.
   const secret = (n: number) => keccak256('0x' + n.toString(16).padStart(64, '0')),
     seedOf = (id: string) => keccak256(id),
-    rounds = new Map<string, { secret: string; casinoBet?: Round['casinoBet'] }>();
+    rounds = new Map<string, { secret: string; createdAt: number; casinoBet?: Round['casinoBet'] }>();
   const view = (id: string): Round => {
     const round = rounds.get(id)!,
       seed = seedOf(id);
     return structuredClone({
       id,
       developer: '0x' + 'a'.repeat(40),
+      createdAt: round.createdAt,
       status: round.casinoBet ? 'revealed' : 'open',
       ...(round.casinoBet
         ? { seed, secret: round.secret, outcome: String(outcome(seed, round.secret).value), casinoBet: round.casinoBet }
@@ -79,7 +80,7 @@ function table(first = 0) {
   const developer = {
     async openRound() {
       const id = keccak256(secret(++count));
-      rounds.set(id, { secret: secret(count) });
+      rounds.set(id, { secret: secret(count), createdAt: Date.now() });
       return view(id);
     },
     seedHash: async (id: string) => seedHash(seedOf(id)),
