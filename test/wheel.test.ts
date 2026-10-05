@@ -23,6 +23,7 @@ function table(first = 0) {
     watching = false,
     looks = 0,
     bank = 0n,
+    bankroll = VIRTUAL_BANKROLL,
     placed = () => {};
   // The developer's rounds, each the hash of a secret, and the seed of its casino bet on it.
   const secret = (n: number) => keccak256('0x' + n.toString(16).padStart(64, '0')),
@@ -82,7 +83,7 @@ function table(first = 0) {
       return view(id);
     },
     seedHash: async (id: string) => seedHash(seedOf(id)),
-    virtualBankroll: async () => VIRTUAL_BANKROLL,
+    virtualBankroll: async () => bankroll,
     async round(id: string) {
       looks++;
       // A round the casino never named, or lost with its row, is unknown to it.
@@ -196,6 +197,8 @@ function table(first = 0) {
     fail: (error: any) => (failing = error),
     loseReplies: (value: boolean) => (lose = value),
     declining: (value: boolean) => (decline = value),
+    /** The casino reports this virtual bankroll. */
+    bankroll: (value: bigint) => (bankroll = value),
     /** Spin: the wheel reads the bets, then waits out the betting time and lets the alarm fire. */
     async spin() {
       await wheel.read();
@@ -367,6 +370,20 @@ test('a step the bankroll declines still reveals its round, and the walk goes on
   );
   assert.equal(spin.number, number, 'the walk went the way each signed step named');
   assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(number) ?? 0n, 'and the bet is paid on its pocket');
+});
+
+test('a walk priced while the casino has no bankroll goes on to its pocket, and pays', async () => {
+  const t = table();
+  await t.wheel.view();
+  const a = t.bet({ chips: { '17': 100n } });
+  t.bankroll(0n);
+  // The casino declines whatever the developer's bank can pay.
+  t.declining(true);
+  await t.spin();
+  const kept = [...t.saves].reverse().find(s => s.walk)!,
+    spin = (await t.wheel.kept(kept.spin!.id))!;
+  assert.equal(spin.number, t.walked(spin).number);
+  assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(spin.number) ?? 0n);
 });
 
 test("a step whose stake the developer's bank cannot pay only reveals its round, and the walk goes on", async () => {
