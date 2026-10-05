@@ -405,14 +405,11 @@ async function settle(receipt: GameReceipt) {
 async function place() {
   const stake = total();
   if (!table?.spin) throw new Error('The wheel is not ready. Try again in a moment.');
-  // Every bet here is a developer bet, which the player allows apart from the casino's.
-  const current = await HookedIn.allowance(),
-    short = stake - BigInt(current.allowance);
-  if (short > 0n || !current.developerBets) {
-    const answer = await HookedIn.requestAllowance({ amount: short > 0n ? short : undefined, developerBets: true });
-    if (BigInt(answer.allowance) < stake || !answer.developerBets)
-      throw new Error('Allow this game to bet these chips with its developer, or deposit if your balance is empty.');
-  }
+  // Every bet here is a developer bet, which the player allows apart from the casino's, with the allowance in the
+  // wallet's top bar.
+  const current = await HookedIn.allowance();
+  if (BigInt(current.allowance) < stake) throw new Error('Not enough allowance for this bet. Set it in the top bar.');
+  if (!current.developerBets) throw new Error('Allow developer bets with the allowance in the top bar.');
   saved = {
     id: crypto.randomUUID(),
     stake: String(stake),
@@ -502,13 +499,9 @@ setInterval(() => {
   connect();
 }, 1_000);
 async function start() {
-  // Every bet here is a developer bet: the player allows them in the dialog the wallet offers as the game opens, not
-  // while a spin takes bets.
-  void HookedIn.allowance()
-    .then(async current => {
-      if (!current.developerBets) await HookedIn.requestAllowance({ developerBets: true });
-    })
-    .catch(() => {});
+  // Every bet here is a developer bet: the allowance dialog the player opens from the wallet's top bar asks about them
+  // too.
+  void HookedIn.placesDeveloperBets().catch(() => {});
   try {
     const info = await HookedIn.info(),
       state = await HookedIn.allowance();
