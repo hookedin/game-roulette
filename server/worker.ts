@@ -12,11 +12,11 @@ interface Env {
   WHEEL: DurableObjectNamespace;
   /** The casino's public API. */
   CASINO_URL: string;
-  /** The name the game is published under, which with its developer's address makes its key. */
-  GAME_NAME: string;
-  /** The private key of the game's developer, the account it is published from: it runs the wheel, places its
-   * casino bets and settles the game's developer bets. A secret. */
-  DEVELOPER_KEY: string;
+  /** The game's key, which the wallet's Developer page shows beside the game. */
+  GAME: string;
+  /** The private key of the game's server, which its developer names on the Developer page: it runs the wheel, places
+   * the game's casino bets from its bank and settles its developer bets, and nothing else. A secret. */
+  SERVER_KEY: string;
 }
 const encoder = new TextEncoder();
 /** How many events a page may fall behind by before it is dropped; it connects again. */
@@ -40,8 +40,8 @@ export class RouletteWheel implements DurableObject {
         {
           developer: await createDeveloper({
             casinoURL: this.env.CASINO_URL,
-            key: this.env.DEVELOPER_KEY,
-            name: this.env.GAME_NAME,
+            key: this.env.SERVER_KEY,
+            game: this.env.GAME,
           }),
           now: () => Date.now(),
           save: state => this.ctx.storage.put('state', state),

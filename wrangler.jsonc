@@ -1,7 +1,7 @@
 // One Worker is the whole game: dist/ is served as static assets, and server/worker.ts answers /api/ with the
 // wheel, a Durable Object. For a game of your own, change `name`, replace or remove `routes`, and set the vars to
-// your casino and the name you publish the game under.
-// The key of the account the game is published from is a secret, set once: `npx wrangler secret put DEVELOPER_KEY`.
+// your casino and the game's key, which the wallet's Developer page shows beside the game.
+// The game's server key, which you name on that page, is a secret, set once: `npx wrangler secret put SERVER_KEY`.
 {
   "name": "hookedin-roulette-game",
   "main": "server/worker.ts",
@@ -12,7 +12,7 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RouletteWheel"] }],
   "vars": {
     "CASINO_URL": "https://casino.hookedin.com",
-    "GAME_NAME": "roulette",
+    "GAME": "0xcbeeba9565065726460bfd9797d8d3b3c9b898aea88b887f10b59797b1afb185",
   },
   "routes": [{ "pattern": "roulette-game.hookedin.com", "custom_domain": true }],
   // The page is built before every deploy, and `wrangler dev` builds it again whenever src/ changes.

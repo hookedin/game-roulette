@@ -4,7 +4,7 @@
  * secret it keeps, and the wheel publishes the hashes of the seeds its casino bets on them will bring. The spin's ID is
  * the hash of both lists, so where the ball lands is fixed before anybody bets, and neither the casino nor the wheel
  * knows it until both are out. Pages bet on the spin the table shows: each wallet places a developer bet in the spin's
- * group, whose meta names the chips, and whose stake goes to the developer's bank.
+ * group, whose meta names the chips, and whose stake goes to the game's bank.
  *
  * The wheel turns every `BETTING_MS`, whether or not anybody bets. At the turn it works out what it owes on each pocket
  * to every bet that is a roulette layout, prices the walk backward from that against the casino's virtual bankroll, and
@@ -259,7 +259,7 @@ export class Wheel {
     if (!this.state.spin) {
       const rounds: string[] = [];
       for (let level = 0; level < levels(ORDER.length); level++) rounds.push((await developer.openRound()).id);
-      // The seeds are derived from the developer's key and the rounds, so their hashes are worked out, never stored.
+      // The seeds are derived from the server's key and the rounds, so their hashes are worked out, never stored.
       const seedHashes = await Promise.all(rounds.map(round => developer.seedHash(round)));
       this.state = { ...this.state, spin: { id: spinId(rounds, seedHashes), rounds, seedHashes }, walk: null };
       this.table.clear();

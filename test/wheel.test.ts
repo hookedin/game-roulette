@@ -11,7 +11,7 @@ import type { Chips } from '../src/table.ts';
 
 const VIRTUAL_BANKROLL = 10n ** 9n;
 
-/** A casino that does what the developer kit asks, with the developer's bank and a clock the test turns. Its rounds'
+/** A casino that does what the developer kit asks, with the game's bank and a clock the test turns. Its rounds'
  * secrets are numbered from `first`. */
 function table(first = 0) {
   let now = 1_000_000,
@@ -25,7 +25,7 @@ function table(first = 0) {
     bank = 0n,
     bankroll = VIRTUAL_BANKROLL,
     placed = () => {};
-  // The developer's rounds, each the hash of a secret, and the seed of its casino bet on it.
+  // The game's rounds, each the hash of a secret, and the seed of its casino bet on it.
   const secret = (n: number) => keccak256('0x' + n.toString(16).padStart(64, '0')),
     seedOf = (id: string) => keccak256(id),
     rounds = new Map<string, { secret: string; createdAt: number; casinoBet?: Round['casinoBet'] }>();
@@ -34,7 +34,7 @@ function table(first = 0) {
       seed = seedOf(id);
     return structuredClone({
       id,
-      developer: '0x' + 'a'.repeat(40),
+      game: '0x' + 'cb'.repeat(32),
       createdAt: round.createdAt,
       status: round.casinoBet ? 'revealed' : 'open',
       ...(round.casinoBet
@@ -51,7 +51,7 @@ function table(first = 0) {
     spins = new Map<string, Spin>(),
     wakes: number[] = [],
     shown: TableView[] = [];
-  /** The developer's casino bet on its round, or a reveal: taken from its bank when the bankroll takes it. */
+  /** The game's casino bet on its round, or a reveal: taken from its bank when the bankroll takes it. */
   const place = async ({ round: id, stake, chance, prize, group, meta }: any) => {
     calls.push(stake === '0' ? 'reveal' : 'casinoBet');
     if (failing) throw failing;
@@ -155,10 +155,10 @@ function table(first = 0) {
     /** The casino reads bets: how often. */
     reads: () => calls.filter(call => call.startsWith('bets')),
     bank: () => bank,
-    /** The developer takes everything out of its bank. */
+    /** The developer takes everything out of the game's bank. */
     empty: () => void (bank = 0n),
     /** A player's wallet places a developer bet in the group of the spin its page named, with its chips in its meta:
-     * its stake goes to the developer's bank, and the casino records when. */
+     * its stake goes to the game's bank, and the casino records when. */
     bet({
       uname = 'p',
       chips = { red: 100n },
@@ -378,7 +378,7 @@ test('a walk priced while the casino has no bankroll goes on to its pocket, and 
   await t.wheel.view();
   const a = t.bet({ chips: { '17': 100n } });
   t.bankroll(0n);
-  // The casino declines whatever the developer's bank can pay.
+  // The casino declines whatever the game's bank can pay.
   t.declining(true);
   await t.spin();
   const kept = [...t.saves].reverse().find(s => s.walk)!,
@@ -387,7 +387,7 @@ test('a walk priced while the casino has no bankroll goes on to its pocket, and 
   assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(spin.number) ?? 0n);
 });
 
-test("a step whose stake the developer's bank cannot pay only reveals its round, and the walk goes on", async () => {
+test("a step whose stake the game's bank cannot pay only reveals its round, and the walk goes on", async () => {
   const t = table();
   await t.wheel.view();
   // The developer takes the stake out of its bank, so the table's steps find it short.

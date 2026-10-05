@@ -49,8 +49,8 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method }; a
   } as unknown as DurableObjectState;
   const wheel = new RouletteWheel(ctx, {
     CASINO_URL: CASINO,
-    GAME_NAME: 'roulette',
-    DEVELOPER_KEY: Wallet.createRandom().privateKey,
+    GAME: `0x${'cb'.repeat(32)}`,
+    SERVER_KEY: Wallet.createRandom().privateKey,
   } as never);
   return {
     calls,
