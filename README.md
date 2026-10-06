@@ -71,7 +71,7 @@ npm install
 npm run dev
 ```
 
-`npm run dev` is `wrangler dev`: it builds the page into `dist/` as it starts, and again whenever `src/` changes, and serves page and wheel together at `http://127.0.0.1:8790/`. Publish the game with `http://127.0.0.1:8790/` from your wallet's **Developer** page. The wheel names the game by its key, which that page shows beside it, and signs with the game's server key: a key you make for the wheel and name on the same page, or your account's own until you name one. Put `GAME=0x…` and `SERVER_KEY=0x…` in a `.dev.vars` file, which git ignores, or pass them with `npm run dev -- --var GAME:0x… --var SERVER_KEY:0x…`, and open the game.
+`npm run dev` is `wrangler dev`: it builds the page into `dist/` as it starts, and again whenever `src/` changes, and serves page and wheel together at `http://127.0.0.1:8790/`. Publish the game with `http://127.0.0.1:8790/` from your wallet's **Developer** page. The wheel names the game by its ID, which that page shows beside it, and signs with the game's server key: a key you make for the wheel and name on the same page, or your account's own until you name one. Put `GAME=0199…` and `SERVER_KEY=0x…` in a `.dev.vars` file, which git ignores, or pass them with `npm run dev -- --var GAME:0199… --var SERVER_KEY:0x…`, and open the game.
 
 The casino the wheel talks to must be the one the players' wallets use. It is the `CASINO_URL` in [wrangler.jsonc](wrangler.jsonc), the public deployment's casino; for another, add `--var CASINO_URL:` and its casino (the `casino` value in the wallet's `config.js`).
 
@@ -79,7 +79,7 @@ The casino the wheel talks to must be the one the players' wallets use. It is th
 
 Create your repository with **Use this template**, then change first:
 
-- [wrangler.jsonc](wrangler.jsonc): `name`, `routes` (a domain on your Cloudflare account; without them the game is served at `<name>.<your-subdomain>.workers.dev`) and `GAME`, your game's key, which the wallet's **Developer** page shows once you publish it.
+- [wrangler.jsonc](wrangler.jsonc): `name`, `routes` (a domain on your Cloudflare account; without them the game is served at `<name>.<your-subdomain>.workers.dev`) and `GAME`, your game's ID, which the wallet's **Developer** page shows once you publish it.
 - `package.json`: the package `name` and `repository`.
 - [src/icon.svg](src/icon.svg): the icon the wallet shows your game by, a square SVG of one symbol that fills the square, with no rounded background of its own: the wallet rounds its corners ([the icon](https://hookedin.com/docs/games/publishing/#the-icon)).
 - A different shared game is a different [src/table.ts](src/table.ts): its equally likely outcomes, in `ORDER`, and what a player's choices are owed on each. A wheel of fortune is one outcome per segment, and the wheel's server stays as it is; so is a crash game whose players all set their cash-out before the round, with outcomes as fine as its crash points need. A game whose players decide while the round runs, such as a crash game with cash-out by hand, cannot be walked in advance: its server keeps the outcome itself and settles every [developer bet](https://hookedin.com/docs/games/developer-bets/) on its word.
@@ -99,7 +99,7 @@ The build writes `dist/_headers`, which Cloudflare applies by itself: the page's
 
 ## Get listed
 
-Publish it yourself: in your wallet, open **Developer** and give the game its name and its URL. It is then at `@<your name>/<game name>` for anyone with a wallet. The library the casino ships with is what `@hookedin` publishes, from [catalog.json](https://github.com/hookedin/play/blob/main/catalog.json) in play; open an issue or a pull request there to be in it.
+Publish it yourself: in your wallet, open **Developer** and give the game its name and its URL. It is then at the address its name makes for anyone with a wallet: `Super Roulette` is at `@<your name>/super-roulette`. The library the casino ships with is what `@hookedin` publishes, from [catalog.json](https://github.com/hookedin/play/blob/main/catalog.json) in play; open an issue or a pull request there to be in it.
 
 ## Tests
 

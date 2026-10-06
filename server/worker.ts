@@ -12,7 +12,7 @@ interface Env {
   WHEEL: DurableObjectNamespace;
   /** The casino's public API. */
   CASINO_URL: string;
-  /** The game's key, which the wallet's Developer page shows beside the game. */
+  /** The game's ID, which the wallet's Developer page shows beside the game. */
   GAME: string;
   /** The private key of the game's server, which its developer names on the Developer page: it runs the wheel, places
    * the game's casino bets from its bank and settles its developer bets, and nothing else. A secret. */
