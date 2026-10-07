@@ -408,7 +408,8 @@ async function place() {
   // Every bet here is a developer bet, which the player allows apart from the casino's, with the allowance in the
   // wallet's top bar.
   const current = await HookedIn.allowance();
-  if (BigInt(current.allowance) < stake) throw new Error('Not enough allowance for this bet. Set it in the top bar.');
+  if (BigInt(current.allowance) < stake)
+    throw new Error('Not enough allowance for this bet. Set one, or deposit, in the top bar.');
   if (!current.developerBets) throw new Error('Allow developer bets with the allowance in the top bar.');
   saved = {
     id: crypto.randomUUID(),
