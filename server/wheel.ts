@@ -89,10 +89,15 @@ export const RETRY_MS = 5_000;
 export const HEARTBEAT_MS = 3_000;
 /** How long the casino holds a read of new bets until one is placed, in seconds. */
 const WAIT_S = 25;
+/** The most bets one spin covers: the rest on it get their stakes back. */
+const MAX_COVERED = 256;
+/** The layout a bet's meta names, `{ chips }` and nothing else, if the wheel takes it. */
+const chipsOf = (bet: PublicDeveloperBet) =>
+  Object.keys(bet.meta).length === 1 ? layout(bet.meta.chips, bet.stake) : null;
 /** What a bet on a spin is owed: what its chips pay on the number if the walk covered it, and its stake back
  * otherwise, as for a bet on a spin the wheel never walked. */
 function owed(bet: PublicDeveloperBet, spin: Spin | null | undefined) {
-  const chips = spin?.covered.includes(bet.bet) ? layout(bet.meta?.chips, bet.stake) : null;
+  const chips = spin?.covered.includes(bet.bet) ? chipsOf(bet) : null;
   return chips ? (payouts(chips).get(spin!.number) ?? 0n) : BigInt(bet.stake);
 }
 
@@ -276,10 +281,12 @@ export class Wheel {
         spin = this.state.spin!;
       const bets = (await this.openDeveloperBets()).filter(bet => bet.group === spin.id);
       if (!this.state.walk) {
-        const covered = bets.flatMap(bet => {
-          const chips = layout(bet.meta?.chips, bet.stake);
-          return chips ? [{ bet: bet.bet, chips }] : [];
-        });
+        const covered = bets
+          .flatMap(bet => {
+            const chips = chipsOf(bet);
+            return chips ? [{ bet: bet.bet, chips }] : [];
+          })
+          .slice(0, MAX_COVERED);
         // Nobody laid a layout, so nothing rides on the turn: the ball lands on a pocket drawn at random, and the
         // spin's rounds take the next turn's bets. Whatever else is in its group is given back.
         if (!covered.length) {

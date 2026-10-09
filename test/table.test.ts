@@ -130,4 +130,18 @@ test('the wheel covers only layouts: known spots, whole chips, adding up to the 
   assert.equal(layout({ red: '0' }, '0'), null);
   assert.equal(layout({ red: '100' }, '1'), null);
   assert.equal(layout(['100'], '100'), null);
+  // Each spot is written one way.
+  for (const spot of [
+    'red:',
+    'red:x',
+    'dozen:02',
+    'dozen: 2',
+    'dozen:2.0',
+    'column:0x3',
+    'column:3:',
+    '07',
+    ' 7',
+    'Red',
+  ])
+    assert.equal(layout({ [spot]: '1' }, '1'), null, spot);
 });

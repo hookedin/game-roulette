@@ -20,20 +20,26 @@ export const colour = (n: number) => (n === 0 ? 'green' : RED.has(n) ? 'red' : '
 export const ORDER = [...Array.from({ length: 36 }, (_, i) => i + 1), 0];
 
 const numbers = (keep: (n: number) => boolean) => ORDER.filter(n => n !== 0 && keep(n));
-/** The numbers a spot on the layout covers: `17`, `red`, `odd`, `low`, `dozen:2`, `column:3`. */
+/** Every spot on the layout, each written one way, and the numbers it covers: `17`, `red`, `odd`, `low`, `dozen:2`,
+ * `column:3`. */
+const SPOTS = new Map<string, number[]>([
+  ...ORDER.map(n => [String(n), [n]] as [string, number[]]),
+  ['red', numbers(n => RED.has(n))],
+  ['black', numbers(n => !RED.has(n))],
+  ['odd', numbers(n => n % 2 === 1)],
+  ['even', numbers(n => n % 2 === 0)],
+  ['low', numbers(n => n <= 18)],
+  ['high', numbers(n => n >= 19)],
+  ...[1, 2, 3].flatMap(k => [
+    [`dozen:${k}`, numbers(n => Math.ceil(n / 12) === k)] as [string, number[]],
+    [`column:${k}`, numbers(n => (n - 1) % 3 === k - 1)] as [string, number[]],
+  ]),
+]);
+/** The numbers a spot on the layout covers. */
 export function covers(spot: string): number[] {
-  const [kind, which] = spot.split(':'),
-    k = Number(which);
-  if (/^([0-9]|[12][0-9]|3[0-6])$/.test(spot)) return [Number(spot)];
-  if (kind === 'red') return numbers(n => RED.has(n));
-  if (kind === 'black') return numbers(n => !RED.has(n));
-  if (kind === 'odd') return numbers(n => n % 2 === 1);
-  if (kind === 'even') return numbers(n => n % 2 === 0);
-  if (kind === 'low') return numbers(n => n <= 18);
-  if (kind === 'high') return numbers(n => n >= 19);
-  if (kind === 'dozen' && [1, 2, 3].includes(k)) return numbers(n => Math.ceil(n / 12) === k);
-  if (kind === 'column' && [1, 2, 3].includes(k)) return numbers(n => (n - 1) % 3 === k - 1);
-  throw new Error('Unknown spot: ' + spot);
+  const covered = SPOTS.get(spot);
+  if (!covered) throw new Error('Unknown spot: ' + spot);
+  return covered;
 }
 /** What a winning chip returns for each unit on it, the chip included: 36 on a number, 3 on a dozen, 2 on red. */
 export const returns = (spot: string) => 36n / BigInt(covers(spot).length);
@@ -58,7 +64,7 @@ export const wireChips = (chips: Chips) =>
 /** The chips a bet's meta names, if they are a layout the wheel takes: known spots and whole amounts that add up to
  * the bet's stake. The wheel covers nothing else, so no player can sign themselves a better table. */
 export function layout(wire: unknown, stake: string): Chips | null {
-  if (wire === null || typeof wire !== 'object' || Array.isArray(wire)) return null;
+  if (wire === null || typeof wire !== 'object' || Array.isArray(wire) || !/^[1-9][0-9]*$/.test(stake)) return null;
   const chips: Chips = {};
   for (const [spot, amount] of Object.entries(wire)) {
     try {

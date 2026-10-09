@@ -89,7 +89,7 @@ export class RouletteWheel implements DurableObject {
       const wheel = await this.open();
       if (url.pathname === '/api/live' && request.method === 'GET') return await this.watch(wheel);
       // Every spin the wheel kept, with its rounds and the bets its walk covered, for anyone to check.
-      const spin = /^\/api\/spins\/([0-9a-fA-F]{64})$/.exec(url.pathname);
+      const spin = /^\/api\/spins\/([0-9a-f]{64})$/.exec(url.pathname);
       if (spin && request.method === 'GET') {
         const kept = await wheel.kept(spin[1]!);
         if (kept) return Response.json(kept);

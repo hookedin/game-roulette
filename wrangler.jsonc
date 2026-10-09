@@ -12,7 +12,7 @@
   "migrations": [{ "tag": "v1", "new_sqlite_classes": ["RouletteWheel"] }],
   "vars": {
     "CASINO_URL": "https://casino.hookedin.com",
-    "GAME": "01a10f9a-871f-7003-b319-a1b6cd26e760",
+    "GAME": "01a11f58-0d28-7001-b792-cbb608f4731f",
   },
   "routes": [{ "pattern": "roulette-game.hookedin.com", "custom_domain": true }],
   // The page is built before every deploy, and `wrangler dev` builds it again whenever src/ changes.
