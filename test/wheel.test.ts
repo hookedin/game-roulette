@@ -86,6 +86,7 @@ function table(first = 0) {
     },
     seedHash: async (id: string) => seedHash(seedOf(id)),
     virtualBankroll: async () => bankroll,
+    bank: async () => bank,
     async round(id: string) {
       looks++;
       // A round the casino never named, or lost with its row, is unknown to it.
@@ -157,6 +158,8 @@ function table(first = 0) {
     bank: () => bank,
     /** The developer takes everything out of the game's bank. */
     empty: () => void (bank = 0n),
+    /** The developer puts money of its own into the game's bank. */
+    fund: (amount: bigint) => void (bank += amount),
     /** A player's wallet places a developer bet in the group of the spin its page named, with its chips in its meta:
      * its stake goes to the game's bank, and the casino records when. */
     bet({
@@ -373,35 +376,58 @@ test('a step the bankroll declines still reveals its round, and the walk goes on
   assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(number) ?? 0n, 'and the bet is paid on its pocket');
 });
 
-test('a walk priced while the casino has no bankroll goes on to its pocket, and pays', async () => {
+test('a bet whose hedge costs more than the bank can pay gets its stake back, and the walk covers the rest', async () => {
+  const t = table();
+  const { spin } = await t.wheel.view();
+  // A number at this stake wins more than the bankroll backs for its edge: its hedge costs more than its stake.
+  const big: Chips = { '17': VIRTUAL_BANKROLL / 100n },
+    a = t.bet({ uname: 'a' }),
+    b = t.bet({ uname: 'b', chips: big });
+  assert.ok(stepsCash(priceSteps(owedOn([big]), VIRTUAL_BANKROLL)) > big['17']!);
+  await t.spin();
+  const kept = (await t.wheel.kept(spin!))!;
+  assert.deepEqual(kept.covered, [a], 'the bank, holding the stakes alone, backs the first bet and not the second');
+  assert.equal(t.paid.get(b), big['17'], 'which gets its stake back');
+  assert.equal(t.paid.get(a), payouts({ red: 100n }).get(kept.number) ?? 0n);
+  assert.ok(t.bank() >= 0n, 'and the bank pays everything it owes');
+  // A bank with money of its own to spare backs the same bet.
+  const next = (await t.wheel.view()).spin!,
+    c = t.bet({ uname: 'b', chips: big });
+  t.fund(stepsCash(priceSteps(owedOn([big]), VIRTUAL_BANKROLL)) - big['17']!);
+  await t.spin();
+  const covered = (await t.wheel.kept(next))!;
+  assert.deepEqual(covered.covered, [c]);
+  assert.equal(t.paid.get(c), payouts(big).get(covered.number) ?? 0n);
+});
+
+test('a bet the casino has no bankroll to back gets its stake back, and the turn lands at random', async () => {
   const t = table();
   await t.wheel.view();
   const a = t.bet({ chips: { '17': 100n } });
   t.bankroll(0n);
-  // The casino declines whatever the game's bank can pay.
-  t.declining(true);
   await t.spin();
-  const kept = [...t.saves].reverse().find(s => s.walk)!,
-    spin = (await t.wheel.kept(kept.spin!.id))!;
-  assert.equal(spin.number, t.walked(spin).number);
-  assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(spin.number) ?? 0n);
+  assert.equal(t.paid.get(a), 100n);
+  assert.equal(t.wheel.state.landed[0]!.spin, null);
+  assert.ok(!t.calls.includes('casinoBet') && !t.calls.includes('reveal'), 'no round is revealed');
 });
 
-test("a step whose stake the game's bank cannot pay only reveals its round, and the walk goes on", async () => {
+test("a step whose stake the game's bank cannot pay, its money taken out after the walk was priced, only reveals its round", async () => {
   const t = table();
-  await t.wheel.view();
-  // The developer takes the stake out of its bank, so the table's steps find it short.
+  const { spin } = await t.wheel.view();
   const a = t.bet({ chips: { '17': 100n } });
+  t.fail(new Error('casino unavailable'));
+  await assert.rejects(t.spin(), /casino unavailable/);
+  t.fail(null);
+  // The developer takes the stake out of its bank, so the saved walk's steps find it short.
   t.empty();
-  await t.spin();
-  const kept = [...t.saves].reverse().find(s => s.walk)!,
-    spin = (await t.wheel.kept(kept.spin!.id))!,
-    { steps, number } = t.walked(spin);
+  await t.wheel.tick();
+  const kept = (await t.wheel.kept(spin!))!,
+    { steps, number } = t.walked(kept);
   assert.ok(
     steps.every(round => round.casinoBet!.stake === 0n),
     'every step only revealed its round',
   );
-  assert.equal(spin.number, number, 'each naming the left');
+  assert.equal(kept.number, number, 'each naming the left');
   assert.equal(t.paid.get(a), payouts({ '17': 100n }).get(number) ?? 0n);
 });
 

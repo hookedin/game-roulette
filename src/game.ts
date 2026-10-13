@@ -356,7 +356,7 @@ async function land(receipt: GameReceipt) {
     if (!covered) {
       shown();
       message(
-        `Your bet came too late for its spin, so its stake is back${
+        `Your bet came too late for its spin, or its bank could not back it, so its stake is back${
           pays === null ? '' : `: its chips would have won ${eth(pays)} on ${number}`
         }.${short}`,
         true,

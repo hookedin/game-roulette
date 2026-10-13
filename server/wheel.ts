@@ -8,12 +8,13 @@
  *
  * The wheel turns every `BETTING_MS`, whether or not anybody bets. At the turn it works out what it owes on each pocket
  * to every bet that is a roulette layout, prices the walk backward from that against the casino's virtual bankroll, and
- * walks it. Each level is one casino bet from its bank, in the spin's group, on the half of the pockets that needs more
- * cash, which the walk goes to when the round's outcome is below the bet's chance: whichever way the round goes, the
- * bank then holds what the rest of the walk needs, and at the pocket what the wheel owes there. A level whose halves
- * need the same cash, or whose stake the bank cannot pay, only reveals its round; so does one the bankroll declines.
- * Either way the walk goes on to its pocket, and the bank carries that level itself. The first step's meta commits to
- * the bets the walk covers. The wheel pays each covered bet what its chips pay on the pocket and every other its stake
+ * walks it. It covers the bets in the order they came, each only if the bank, which holds their stakes, still pays the
+ * whole walk with it, less the stakes it gives back: a bet past that gets its stake back, so the wheel never owes more
+ * than its bank holds, and needs nothing in it of its own. Each level is one casino bet from its bank, in the spin's
+ * group, on the half of the pockets that needs more cash, which the walk goes to when the round's outcome is below the
+ * bet's chance: whichever way the round goes, the bank then holds what the rest of the walk needs, and at the pocket
+ * what the wheel owes there. A level whose halves need the same cash only reveals its round; so does one the bankroll
+ * declines, and the bank carries that level itself. The first step's meta commits to the bets the walk covers. The wheel pays each covered bet what its chips pay on the pocket and every other its stake
  * back, and keeps the spin for anyone to check. A turn nobody laid a layout on has nothing riding on it: the ball lands
  * on a pocket drawn at random, nothing is walked, and the spin's rounds, still unrevealed, take the next turn's bets.
  * So an empty table costs the casino nothing, and wakes nobody: whoever looks next finds the turn the clock has come
@@ -22,7 +23,7 @@
  * test.
  */
 import type { Developer, PublicDeveloperBet, Round } from '@hookedin/play/sdk/developer';
-import { levels, next, priceSteps, stepBet } from '@hookedin/play/sdk/steps';
+import { levels, next, priceSteps, stepBet, stepsCash } from '@hookedin/play/sdk/steps';
 import type { StepNode } from '@hookedin/play/sdk/steps';
 import { json } from '@hookedin/play/sdk/json';
 import { ORDER, coveredHash, layout, owedOn, payouts, spinId, stepOf } from '../src/table.ts';
@@ -280,27 +281,38 @@ export class Wheel {
     try {
       const { developer } = this.deps,
         spin = this.state.spin!;
-      const bets = (await this.openDeveloperBets()).filter(bet => bet.group === spin.id);
+      const open = await this.openDeveloperBets(),
+        bets = open.filter(bet => bet.group === spin.id);
       if (!this.state.walk) {
-        const covered = bets
-          .flatMap(bet => {
-            const chips = chipsOf(bet);
-            return chips ? [{ bet: bet.bet, chips }] : [];
-          })
-          .slice(0, MAX_COVERED);
-        // Nobody laid a layout, so nothing rides on the turn: the ball lands on a pocket drawn at random, and the
-        // spin's rounds take the next turn's bets. Whatever else is in its group is given back.
+        const layouts = bets
+            .flatMap(bet => {
+              const chips = chipsOf(bet);
+              return chips ? [{ bet: bet.bet, stake: bet.stake, chips }] : [];
+            })
+            .slice(0, MAX_COVERED),
+          // A turn with no layout on it asks the casino nothing.
+          [bankroll, bank] = layouts.length
+            ? await Promise.all([developer.virtualBankroll(), developer.bank()])
+            : [0n, 0n];
+        // What the bank holds beyond every open bet's stake, which it gives back to each bet the walk leaves out.
+        const spare = bank - open.reduce((sum, bet) => sum + bet.stake, 0n),
+          pays = (taken: typeof layouts) =>
+            stepsCash(priceSteps(owedOn(taken.map(({ chips }) => chips)), bankroll)) <=
+            spare + taken.reduce((sum, { stake }) => sum + stake, 0n);
+        let covered = layouts;
+        if (layouts.length && !pays(covered)) {
+          covered = [];
+          for (const layout of layouts) if (pays([...covered, layout])) covered.push(layout);
+        }
+        // Nobody laid a layout the bank can back, so nothing rides on the turn: the ball lands on a pocket drawn at
+        // random, and the spin's rounds take the next turn's bets. Whatever else is in its group is given back.
         if (!covered.length) {
           await this.settle(null, bets);
           return await this.land(Math.floor(Math.random() * ORDER.length), null);
         }
         this.state = {
           ...this.state,
-          walk: {
-            covered: covered.map(({ bet }) => bet),
-            owed: owedOn(covered.map(({ chips }) => chips)),
-            bankroll: await developer.virtualBankroll(),
-          },
+          walk: { covered: covered.map(({ bet }) => bet), owed: owedOn(covered.map(({ chips }) => chips)), bankroll },
         };
         await this.deps.save(this.state);
       }
@@ -338,8 +350,8 @@ export class Wheel {
     this.table.clear();
   }
   /** One level of the walk on its round: its casino bet, in the spin's group with its side in its meta, or a reveal of
-   * the round when it bets nothing or its bank cannot pay the stake. A round revealed already is the step as it was
-   * placed. */
+   * the round when it bets nothing or its bank cannot pay the stake, as when the bankroll moved since the walk was
+   * priced. A round revealed already is the step as it was placed. */
   private async step(round: string, bet: ReturnType<typeof stepBet>, meta: Record<string, unknown>) {
     const { developer } = this.deps,
       group = this.state.spin!.id;
