@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>HookedIn Roulette</title>
+    <link rel="icon" type="image/svg+xml" href="./brand/hookedin-mark.svg" />
+    <link rel="stylesheet" href="./shared.css" />
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <section class="stage table" id="table" aria-label="Table">
+        <div class="table-top">
+          <div class="stage-meta">
+            <span id="phase">Place your bets</span> · <span id="players">Connecting to the wheel…</span>
+          </div>
+          <div class="stage-badge" id="clock">Connecting…</div>
+          <ol class="history" id="history" aria-label="Recent numbers, newest first"></ol>
+        </div>
+        <div class="wheel-box" id="wheel-box">
+          <div class="disc">
+            <canvas id="wheel" width="720" height="720" aria-hidden="true"></canvas>
+            <div class="landed" id="landed">–</div>
+          </div>
+          <div class="result" id="result"></div>
+        </div>
+        <div class="board" id="board" role="group" aria-label="Betting board"></div>
+      </section>
+      <div class="dock">
+        <div class="status" id="status" role="status" aria-live="polite">Connecting to your wallet…</div>
+        <section class="controls" aria-label="Bet controls">
+          <div class="field chip-field">
+            <div class="field-label" id="chip-label">Chip</div>
+            <div class="chips" id="chips" role="group" aria-labelledby="chip-label"></div>
+          </div>
+          <button class="secondary" id="undo" type="button">Undo</button>
+          <button class="secondary" id="clear" type="button">Clear</button>
+          <div class="readout total">
+            <span>Total</span><strong id="total">0</strong
+            ><span data-asset title="A millionth of an ETH: 1 METH = 0.000001 ETH">METH</span>
+          </div>
+          <button class="primary" id="place" type="button">Connecting wallet…</button>
+        </section>
+      </div>
+      <footer class="foot">
+        <details class="rules">
+          <summary>How to play</summary>
+          <p>
+            Pick a chip, then tap the board: a number, a dozen, a column (2:1), or red, black, odd, even, 1–18 or 19–36.
+            Undo takes back your last chip and Clear empties the board. Place bets, and your wallet signs every chip as
+            one bet. Your chips stay on the board after the spin, to bet again or change.
+          </p>
+          <p>
+            One wheel serves everyone at the table. It spins every 20 seconds, whether or not anybody bets, and takes no
+            bets in the last 3 seconds before each spin. A number returns 36 for 1, a dozen or a column 3 for 1, and the
+            rest 2 for 1. Zero is the house's: that is the whole 2.7% edge.
+          </p>
+          <p>
+            Your stake goes to the game's developer, who runs the wheel and pays the winners: you trust them to pay.
+            Where the ball lands is fixed before anyone bets, and this page checks every spin against the casino's
+            records, and shows it if a spin paid you short.
+          </p>
+        </details>
+      </footer>
+    </main>
+    <script type="module" src="./game.js" crossorigin="anonymous"></script>
+  </body>
+</html>
