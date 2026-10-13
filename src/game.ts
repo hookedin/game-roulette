@@ -3,7 +3,7 @@
  * spin, and works out where the ball landed from the casino's record of each round, checked against the spin its bet
  * named. The scheme is explained in ../server/wheel.ts.
  */
-import { HookedIn } from '@hookedin/play/sdk/sdk';
+import { HookedIn, HookedInError } from '@hookedin/play/sdk/sdk';
 import { json, plain, read } from '@hookedin/play/sdk/json';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
 import { next, stepOutcome } from '@hookedin/play/sdk/steps';
@@ -439,8 +439,8 @@ async function place() {
   // Every bet here is a developer bet, which the player allows apart from the casino's, with the allowance in the
   // wallet's top bar.
   const current = await HookedIn.allowance();
-  if (current.allowance < stake) throw new Error(HookedIn.NOT_ENOUGH_ALLOWANCE);
-  if (!current.developerBets) throw new Error('Allow developer bets with the allowance in the top bar.');
+  if (current.allowance < stake) throw new HookedInError('insufficient-allowance', HookedIn.NOT_ENOUGH_ALLOWANCE);
+  if (!current.developerBets) throw new HookedInError('developer-bets-not-allowed', HookedIn.NO_DEVELOPER_BETS);
   saved = { id: crypto.randomUUID(), stake, spin: table.spin, chips: { ...chips } };
   persist();
   await ask();
@@ -538,6 +538,11 @@ async function start() {
     // A developer bet's settled receipt arrives by itself once the wallet has collected it.
     HookedIn.onReceipt(receipt => {
       if (saved && receipt.id === saved.id) void settle(receipt);
+    });
+    // A refusal for want of allowance goes once the player changes the allowance in the top bar.
+    HookedIn.onAllowance(() => {
+      const shown = $('status').textContent;
+      if (shown === HookedIn.NOT_ENOUGH_ALLOWANCE || shown === HookedIn.NO_DEVELOPER_BETS) message(idle());
     });
     if (saved) {
       chips = { ...saved.chips };
