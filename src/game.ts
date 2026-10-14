@@ -539,10 +539,17 @@ async function start() {
     HookedIn.onReceipt(receipt => {
       if (saved && receipt.id === saved.id) void settle(receipt);
     });
-    // A refusal for want of allowance goes once the player changes the allowance in the top bar.
-    HookedIn.onAllowance(() => {
+    // The table opens saying to set an allowance in the top bar: that word, or a refusal for want of allowance or of
+    // leave for developer bets, goes once the player sets one.
+    HookedIn.onAllowance(({ allowance }) => {
       const shown = $('status').textContent;
-      if (shown === HookedIn.NOT_ENOUGH_ALLOWANCE || shown === HookedIn.NO_DEVELOPER_BETS) message(idle());
+      if (
+        allowance &&
+        (shown === HookedIn.NO_ALLOWANCE ||
+          shown === HookedIn.NOT_ENOUGH_ALLOWANCE ||
+          shown === HookedIn.NO_DEVELOPER_BETS)
+      )
+        message(idle());
     });
     if (saved) {
       chips = { ...saved.chips };
@@ -555,7 +562,7 @@ async function start() {
         persist();
       }
     }
-    if (!saved && !offline) message(idle());
+    if (!saved && !offline) message((await HookedIn.allowance()).allowance ? idle() : HookedIn.NO_ALLOWANCE);
   } catch (error: any) {
     message(error.message, true);
   }
