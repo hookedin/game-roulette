@@ -281,19 +281,24 @@ export class Wheel {
     try {
       const { developer } = this.deps,
         spin = this.state.spin!;
-      const open = await this.openDeveloperBets(),
-        bets = open.filter(bet => bet.group === spin.id);
+      let open = await this.openDeveloperBets(),
+        bankroll = 0n,
+        bank = 0n;
+      // A walk to price reads the bank, then the bets again: every stake the bank holds is then among the bets it gives
+      // back, and a bet placed between the two reads counts as owed without its stake, never as cash to spend. A turn
+      // with no layout on it asks the casino nothing more.
+      if (!this.state.walk && open.some(bet => bet.group === spin.id && chipsOf(bet))) {
+        [bankroll, bank] = await Promise.all([developer.virtualBankroll(), developer.bank()]);
+        open = await this.openDeveloperBets();
+      }
+      const bets = open.filter(bet => bet.group === spin.id);
       if (!this.state.walk) {
         const layouts = bets
-            .flatMap(bet => {
-              const chips = chipsOf(bet);
-              return chips ? [{ bet: bet.bet, stake: bet.stake, chips }] : [];
-            })
-            .slice(0, MAX_COVERED),
-          // A turn with no layout on it asks the casino nothing.
-          [bankroll, bank] = layouts.length
-            ? await Promise.all([developer.virtualBankroll(), developer.bank()])
-            : [0n, 0n];
+          .flatMap(bet => {
+            const chips = chipsOf(bet);
+            return chips ? [{ bet: bet.bet, stake: bet.stake, chips }] : [];
+          })
+          .slice(0, MAX_COVERED);
         // What the bank holds beyond every open bet's stake, which it gives back to each bet the walk leaves out.
         const spare = bank - open.reduce((sum, bet) => sum + bet.stake, 0n),
           pays = (taken: typeof layouts) =>

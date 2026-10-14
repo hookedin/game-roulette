@@ -113,8 +113,13 @@ function table(first = 0) {
     },
     casinoBet: (bet: any) => place(bet),
     reveal: (bet: any) => place({ ...bet, stake: 0n, chance: 0n, prize: 0n }),
+    // As the casino settles: a bet settled already is left as it is, and the rest are paid whole, or refused when the
+    // game's bank cannot pay them all.
     async settle(settlements: { bet: string; player: bigint }[]) {
-      for (const { bet, player } of settlements) {
+      const due = settlements.filter(({ bet }) => open.has(bet));
+      if (due.reduce((sum, { player }) => sum + player, 0n) > bank)
+        throw Object.assign(new Error("The game's bank cannot pay these settlements"), { code: 'bank-short' });
+      for (const { bet, player } of due) {
         paid.set(bet, player);
         bank -= player;
         open.delete(bet);
@@ -398,6 +403,57 @@ test('a bet whose hedge costs more than the bank can pay gets its stake back, an
   const covered = (await t.wheel.kept(next))!;
   assert.deepEqual(covered.covered, [c]);
   assert.equal(t.paid.get(c), payouts(big).get(covered.number) ?? 0n);
+});
+
+test('a bet placed while a walk is priced or taken is never spent: it is paid what it is owed, even after a restart', async () => {
+  const chips: Chips = { '17': VIRTUAL_BANKROLL / 100n },
+    lateChips: Chips = { '1': VIRTUAL_BANKROLL / 10n },
+    hedge = stepsCash(priceSteps(owedOn([chips]), VIRTUAL_BANKROLL)) - chips['17']!;
+  // A bank holding the stakes alone, and one holding what the first bet's hedge needs beyond its stake; a late bet comes
+  // at each read and step a walk waits on: the open bets' list (by its `status`) before the bank and after it.
+  const boundaries = [
+    ['bets', 1],
+    ['virtualBankroll', 1],
+    ['bank', 1],
+    ['bets', 2],
+    ['casinoBet', 1],
+  ] as const;
+  for (const funds of [0n, hedge])
+    for (const [during, nth] of boundaries)
+      for (const restart of [false, true]) {
+        const t = table(),
+          developer = t.deps.developer as any,
+          call = developer[during];
+        let calls = 0;
+        const { spin } = await t.wheel.view();
+        t.fund(funds);
+        const first = t.bet({ uname: 'first', chips });
+        let late: string | undefined;
+        developer[during] = (...args: any[]) => {
+          if ((during !== 'bets' || args[0]?.status === 'open') && ++calls === nth)
+            late ??= t.bet({ uname: 'late', chips: lateChips, spin: spin! });
+          return call(...args);
+        };
+        let wheel = t.wheel;
+        if (restart) {
+          // The walk's first step reaches the casino and its reply is lost; the Durable Object starts again from its save.
+          t.loseReplies(true);
+          await t.spin().catch(() => {});
+          t.loseReplies(false);
+          wheel = new Wheel(t.deps, structuredClone(t.saves.at(-1)!));
+          t.advance(1000);
+          await wheel.tick();
+        } else await t.spin();
+        // The casino refuses a settlement the game's bank cannot pay: every bet paid means the walk spent nothing owed.
+        await wheel.read();
+        const kept = await wheel.kept(spin!),
+          owed = (bet: string, layout: Chips) =>
+            kept?.covered.includes(bet) ? (payouts(layout).get(kept.number) ?? 0n) : Object.values(layout)[0]!,
+          name = `${funds ? 'funded' : 'stakes alone'}, during ${during} ${nth}${restart ? ', restarted' : ''}`;
+        assert.equal(t.paid.get(first), owed(first, chips), name);
+        if (late) assert.equal(t.paid.get(late), owed(late, lateChips), name);
+        else assert.equal(during, 'casinoBet', `${name}: only a walk that takes no step leaves no late bet`);
+      }
 });
 
 test('a bet the casino has no bankroll to back gets its stake back, and the turn lands at random', async () => {
