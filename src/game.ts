@@ -6,9 +6,9 @@
 import { HookedIn, HookedInError } from '@hookedin/play/sdk/sdk';
 import { json, plain, read } from '@hookedin/play/sdk/json';
 import { outcome, roundId, seedHash as hashOfSeed } from '@hookedin/play/sdk/outcome';
-import { next, stepOutcome } from '@hookedin/play/sdk/steps';
+import { levels, next, stepOutcome } from '@hookedin/play/sdk/steps';
 import type { GameReceipt } from '@hookedin/play/sdk/sdk';
-import { ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf } from './table.ts';
+import { MAX_COVERED, ORDER, colour, covers, coveredHash, layout, payouts, spinId, stepOf } from './table.ts';
 import type { Chips } from './table.ts';
 import type { Landing, Spin, TableView } from '../server/wheel.ts';
 import { mountWheel } from './wheel-view.ts';
@@ -43,12 +43,21 @@ const readTable = read.object<TableView>({
   spin: read.nullable(spinOf),
   closesAt: read.nullable(read.time),
   now: read.time,
-  players: read.exactly((value: unknown): value is number => Number.isSafeInteger(value) && (value as number) >= 0),
+  players: read.count,
   staked: read.whole,
   landed: read.list(
     read.object<Landing>({ at: read.time, number: read.oneOf(...ORDER), spin: read.nullable(spinOf) }),
     12,
   ),
+});
+/** A spin the wheel kept, as its JSON shows it: a round and a seed hash for each level of the walk, the bets it covered
+ * and the number it reached. */
+const readSpin = read.object<Spin>({
+  id: spinOf,
+  rounds: read.list(read.hash, levels(ORDER.length)),
+  seedHashes: read.list(read.hash, levels(ORDER.length)),
+  covered: read.list(read.hash, MAX_COVERED),
+  number: read.oneOf(...ORDER),
 });
 const $ = <T extends HTMLElement = HTMLElement>(id: string) => document.getElementById(id) as T;
 /** The wheel shows the table every few seconds when nothing changes: a page that hears nothing for longer has lost
@@ -298,7 +307,7 @@ async function keptSpin(id: string): Promise<Spin | null> {
   if (response.status === 404) return null;
   const value = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(value.error || 'The wheel is offline.');
-  return value;
+  return readSpin(value);
 }
 /** The number a spin's walk reached, worked out here from the casino's record of each of its rounds, read through the
  * player's wallet: each round is the one the spin named for its level, before the bet, by its hash and the hash of
@@ -314,8 +323,8 @@ async function walked(bet: Saved, spin: Spin) {
       !round ||
       round.status !== 'revealed' ||
       round.casinoBet?.group !== bet.spin ||
-      roundId(round.secret!) !== id.toLowerCase() ||
-      hashOfSeed(round.seed!) !== spin.seedHashes[level]!.toLowerCase() ||
+      roundId(round.secret!) !== id ||
+      hashOfSeed(round.seed!) !== spin.seedHashes[level] ||
       (level === 0 && round.casinoBet.meta.covered !== coveredHash(spin.covered))
     )
       return null;

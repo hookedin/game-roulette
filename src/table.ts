@@ -83,6 +83,8 @@ export const spinId = (rounds: readonly string[], seedHashes: readonly string[])
   keccak256(concat([...rounds, ...seedHashes])).slice(2);
 /** The hash a spin's first step commits to in its meta: the covered bets' hashes, one after another. */
 export const coveredHash = (covered: readonly string[]) => keccak256(concat(covered));
+/** The most bets one spin covers: the rest on it get their stakes back. */
+export const MAX_COVERED = 256;
 /** One step of a spin's walk, from the casino's record of its round, as `stepOutcome` takes it: the side the step's
  * casino bet signed and its chance, or neither for a round the step only revealed, and the round's outcome. */
 export function stepOf(round: Round, outcome = round.outcome!) {

@@ -26,7 +26,7 @@ import type { Developer, PublicDeveloperBet, Round } from '@hookedin/play/sdk/de
 import { levels, next, priceSteps, stepBet, stepsCash } from '@hookedin/play/sdk/steps';
 import type { StepNode } from '@hookedin/play/sdk/steps';
 import { json } from '@hookedin/play/sdk/json';
-import { ORDER, coveredHash, layout, owedOn, payouts, spinId, stepOf } from '../src/table.ts';
+import { MAX_COVERED, ORDER, coveredHash, layout, owedOn, payouts, spinId, stepOf } from '../src/table.ts';
 
 /** A spin the table takes bets on: its rounds, one for each level of the walk, and the hashes of the seeds the wheel's
  * casino bets on them bring. Its ID, `spinId` of the two, is the group of every bet on it. */
@@ -91,8 +91,6 @@ export const RETRY_MS = 5_000;
 export const HEARTBEAT_MS = 3_000;
 /** How long the casino holds a read of new bets until one is placed, in seconds. */
 const WAIT_S = 25;
-/** The most bets one spin covers: the rest on it get their stakes back. */
-const MAX_COVERED = 256;
 /** The layout a bet's meta names, `{ chips }` and nothing else, if the wheel takes it. */
 const chipsOf = (bet: PublicDeveloperBet) =>
   Object.keys(bet.meta).length === 1 ? layout(bet.meta.chips, bet.stake) : null;
@@ -179,7 +177,7 @@ export class Wheel {
   }
   /** A spin the wheel kept, for anyone to check. */
   kept(id: string) {
-    return this.deps.kept(id.toLowerCase());
+    return this.deps.kept(id);
   }
   /** While a page watches, the wheel follows the casino's bets: the casino holds each read until a bet on the game is
    * placed, so each joins the table as it comes. */

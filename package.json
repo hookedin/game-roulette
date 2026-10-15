@@ -11,7 +11,7 @@
   "scripts": {
     "build": "hookedin-game build",
     "dev": "wrangler dev",
-    "typecheck": "tsc -p tsconfig.json --noEmit && tsc -p server/tsconfig.json --noEmit",
+    "typecheck": "tsc && tsc -p server",
     "test": "npm run typecheck && node --import tsx --test test/*.test.ts server/*.test.ts",
     "format": "prettier --write .",
     "format:check": "prettier --check ."
@@ -30,6 +30,7 @@
   },
   "allowScripts": {
     "esbuild": true,
+    "fsevents": true,
     "workerd": true
   }
 }
