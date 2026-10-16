@@ -13,7 +13,7 @@ interface Env {
   WHEEL: DurableObjectNamespace;
   /** The casino's public API. */
   CASINO_URL: string;
-  /** The game's ID, which the wallet's Developer page shows beside the game. */
+  /** The game's ID, which the wallet's Developer page shows under the game. */
   GAME: string;
   /** The private key of the game's server, which its developer names on the Developer page: it runs the wheel, places
    * the game's casino bets from its bank and settles its developer bets, and nothing else. A secret. */
@@ -22,6 +22,7 @@ interface Env {
 const encoder = new TextEncoder();
 /** How many events a page may fall behind by before it is dropped; it connects again. */
 const MAX_BEHIND = 16;
+const STREAM = { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' };
 
 export class RouletteWheel implements DurableObject {
   private wheel: Promise<Wheel> | null = null;
@@ -36,8 +37,11 @@ export class RouletteWheel implements DurableObject {
   /** One wheel, opened once and shared by every request that arrives meanwhile. A start that failed
    * is not kept: the casino it needs may be there by the next request. */
   private open() {
-    return (this.wheel ??= (async () =>
-      new Wheel(
+    return (this.wheel ??= (async () => {
+      // Checked before ethers reads it, since ethers repeats in its error a key it cannot read.
+      if (!/^0x[0-9a-f]{64}$/.test(this.env.SERVER_KEY))
+        throw new Error('SERVER_KEY is not 32 bytes of lowercase hex.');
+      return new Wheel(
         {
           developer: await createDeveloper({
             casinoURL: this.env.CASINO_URL,
@@ -53,7 +57,8 @@ export class RouletteWheel implements DurableObject {
           watched: () => this.pages.size > 0,
         },
         await this.ctx.storage.get<WheelState>('state'),
-      ))().catch(error => {
+      );
+    })().catch(error => {
       this.wheel = null;
       throw error;
     }));
@@ -82,13 +87,14 @@ export class RouletteWheel implements DurableObject {
       throw error;
     }
     void wheel.follow();
-    return new Response(readable, { headers: { 'Content-Type': 'text/event-stream', 'Cache-Control': 'no-store' } });
+    return new Response(readable, { headers: STREAM });
   }
   async fetch(request: Request) {
-    const url = new URL(request.url);
+    const url = new URL(request.url),
+      live = url.pathname === '/api/live' && request.method === 'GET';
     try {
       const wheel = await this.open();
-      if (url.pathname === '/api/live' && request.method === 'GET') return await this.watch(wheel);
+      if (live) return await this.watch(wheel);
       // Every spin the wheel kept, with its rounds and the bets its walk covered, for anyone to check.
       const spin = /^\/api\/spins\/([0-9a-f]{64})$/.exec(url.pathname);
       if (spin && request.method === 'GET') {
@@ -97,7 +103,11 @@ export class RouletteWheel implements DurableObject {
       }
       return Response.json({ error: 'Not found' }, { status: 404 });
     } catch (error: any) {
-      return Response.json({ error: error.message || 'The wheel is unavailable' }, { status: 503 });
+      const reason = error.message || 'The wheel is unavailable';
+      console.error('Wheel:', reason);
+      // A page's event stream reads no refused answer, so it is told why in an event, and connects again later.
+      if (live) return new Response(`event: down\ndata: ${json({ error: reason })}\n\n`, { headers: STREAM });
+      return Response.json({ error: reason }, { status: 503 });
     }
   }
   /** A turn somebody bet on is taken on time whether or not anybody is watching, and a watched table shows itself.

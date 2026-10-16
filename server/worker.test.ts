@@ -8,11 +8,13 @@ import { BETTING_MS, HEARTBEAT_MS, RETRY_MS } from './wheel.ts';
 const CASINO = 'https://casino.test',
   GAME = '0199a1b2-c3d4-7e5f-8a6b-7c8d9e0f1a2b',
   ROUND = '0x' + 'd'.repeat(64);
-const body = async (response: Response) => (await response.json()) as any;
 
 /** A casino that can be taken away and put back, somewhere for the Durable Object to keep its state, the alarms it
  * asks for, a clock, and pages that watch the table. */
-function worker(t: { mock: { method: typeof import('node:test').mock.method }; after: (fn: () => unknown) => void }) {
+function worker(
+  t: { mock: { method: typeof import('node:test').mock.method }; after: (fn: () => unknown) => void },
+  key = Wallet.createRandom().privateKey,
+) {
   const calls: string[] = [],
     alarms: number[] = [],
     watching: (() => Promise<void>)[] = [];
@@ -51,7 +53,7 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method }; a
   const wheel = new RouletteWheel(ctx, {
     CASINO_URL: CASINO,
     GAME,
-    SERVER_KEY: Wallet.createRandom().privateKey,
+    SERVER_KEY: key,
   } as never);
   return {
     calls,
@@ -79,17 +81,29 @@ function worker(t: { mock: { method: typeof import('node:test').mock.method }; a
   };
 }
 
-test('a wheel that could not reach the casino opens at the next request', async t => {
-  const x = worker(t);
+test('a wheel that could not reach the casino logs why, tells the page, and opens at the next request', async t => {
+  const x = worker(t),
+    logged = t.mock.method(console, 'error', () => {});
   const down = await x.live();
-  assert.equal(down.status, 503);
-  assert.match((await body(down)).error, /Network connection lost/);
+  assert.equal(down.headers.get('content-type'), 'text/event-stream');
+  assert.equal(await down.text(), 'event: down\ndata: {"error":"Network connection lost."}\n\n');
+  assert.deepEqual(logged.mock.calls[0]!.arguments, ['Wheel:', 'Network connection lost.']);
   x.start();
   // The pages keep asking, and the one that arrives after the casino is back opens the table.
   const up = await x.watch();
   assert.equal(up.response.status, 200);
   assert.equal(up.response.headers.get('content-type'), 'text/event-stream');
   assert.match(up.table.spin, /^[0-9a-f]{64}$/, 'on a spin of rounds the casino named');
+});
+
+test('a server key in any form but 32 bytes of lowercase hex is refused, and never repeated', async t => {
+  const key = Wallet.createRandom().privateKey,
+    x = worker(t, key + '\n'),
+    logged = t.mock.method(console, 'error', () => {});
+  x.start();
+  const down = await (await x.live()).text();
+  assert.match(down, /SERVER_KEY is not 32 bytes of lowercase hex/);
+  assert.ok(![down, ...logged.mock.calls[0]!.arguments].some(text => String(text).includes(key.slice(2))));
 });
 
 test('every request that arrives while the wheel is opening shares the one attempt', async t => {

@@ -9,7 +9,7 @@ This repository is also a GitHub template: the starting point for a game with a 
 ## How to play
 
 1. Pick a chip and tap the board: a number, red or black, odd or even, 1–18 or 19–36, a dozen or a column (2:1). **Undo** takes back the last chip, **Clear** empties the board, and right-click or Shift-click takes a chip off.
-2. Press **Place bets**, or Space. The game plays with the allowance you set with **Allowance** in the wallet's top bar. A bet is final once it is in.
+2. Press **Place bets**, or Space. The game plays with the allowance you set with **Set allowance** in the wallet's top bar. A bet is final once it is in.
 3. The wheel spins every 20 seconds, for everyone at once, whether or not anybody bets, and takes no bets in the last 3 seconds of each turn.
 4. A number returns 36 for 1, a dozen or a column 3 for 1, and the even-money bets 2 for 1. Zero is the house's: that is the whole 2.7% edge. Your chips stay on the board: **Bet again** places them on the next spin.
 
@@ -29,7 +29,7 @@ Page and wheel are one Cloudflare Worker ([server/worker.ts](server/worker.ts)):
 
 ### The flow
 
-The Worker answers two routes. `GET /api/live` is a stream of server-sent events: the table as it stands, then each change as it happens, and the table every 3 seconds while nothing changes; the table is the spin to bet on, when the wheel turns (by the wheel's clock), who is at the table and where the last turns landed. While a page watches, the wheel follows the game's bets from the casino, not the page: the casino holds each read until a bet is placed, so a bet joins the table as soon as the wallet has placed it. `GET /api/spins/:spin` gives a spin the wheel kept. A player's layout is one developer bet in the spin's group. At the turn the wheel covers every layout in the group, walks the tree one casino bet per level, pays each covered bet what its chips pay on the number and gives every other bet its stake back; a turn with no layout on it lands at random and reveals nothing, so it costs the casino nothing. The page then checks the spin as below, through the player's wallet. [Developer bets](https://hookedin.com/docs/games/developer-bets/) goes through it step by step, and [server/wheel.ts](server/wheel.ts) is the code.
+The Worker answers two routes. `GET /api/live` is a stream of server-sent events: the table as it stands, then each change as it happens, and the table every 3 seconds while nothing changes; the table is the spin to bet on, when the wheel turns (by the wheel's clock), who is at the table and where the last turns landed. A wheel that cannot open answers with one `down` event that says why, which the page shows. While a page watches, the wheel follows the game's bets from the casino, not the page: the casino holds each read until a bet is placed, so a bet joins the table as soon as the wallet has placed it. `GET /api/spins/:spin` gives a spin the wheel kept. A player's layout is one developer bet in the spin's group. At the turn the wheel covers every layout in the group, walks the tree one casino bet per level, pays each covered bet what its chips pay on the number and gives every other bet its stake back; a turn with no layout on it lands at random and reveals nothing, so it costs the casino nothing. The page then checks the spin as below, through the player's wallet. [Developer bets](https://hookedin.com/docs/games/developer-bets/) goes through it step by step, and [server/wheel.ts](server/wheel.ts) is the code.
 
 ### Files
 
@@ -71,7 +71,15 @@ npm install
 npm run dev
 ```
 
-`npm run dev` is `wrangler dev`: it builds the page into `dist/` as it starts, and again whenever `src/` changes, and serves page and wheel together at `http://127.0.0.1:8790/`. Publish the game with `http://127.0.0.1:8790/` from your wallet's **Developer** page. The wheel names the game by its ID, which that page shows beside it, and signs with the game's server key: a key you make for the wheel and name on the same page, or your account's own until you name one. Put `GAME=0199…` and `SERVER_KEY=0x…` in a `.dev.vars` file, which git ignores, or pass them with `npm run dev -- --var GAME:0199… --var SERVER_KEY:0x…`, and open the game.
+`npm run dev` is `wrangler dev`: it builds the page into `dist/` as it starts, and again whenever `src/` changes, and serves page and wheel together at `http://127.0.0.1:8790/`.
+
+Every roulette bet is a developer bet, so trying the game with the real casino takes a published game and real ETH, as [trying it](https://hookedin.com/docs/games/developer-bets/#trying-it) says; [game-crash](https://github.com/hookedin/game-crash)'s `npm run demo` shows a game with a server on simulated funds. Publish the game with `http://127.0.0.1:8790/` from your wallet's **Developer** page, from an account with a balance. The wheel names the game by its ID, shown under the game on that page as **Game ID**, and signs with the game's server key. In the game's folder, this makes the key, saves it in `.dev.vars`, which git ignores, and prints only its address:
+
+```sh
+node -e "const w = require('ethers').Wallet.createRandom(); require('fs').appendFileSync('.dev.vars', 'SERVER_KEY=' + w.privateKey + '\n'); console.log(w.address)"
+```
+
+Name that address as the game's server key on the **Developer** page; the key goes nowhere but `.dev.vars` and `npx wrangler secret put SERVER_KEY` ([the server key](https://hookedin.com/docs/games/developer-bets/#your-games-server-key-and-bank)). Add `GAME=<the game's ID>` to `.dev.vars`, and open the game.
 
 The casino the wheel talks to must be the one the players' wallets use. It is the `CASINO_URL` in [wrangler.jsonc](wrangler.jsonc), the public deployment's casino; for another, add `--var CASINO_URL:` and its casino (the `casino` value in the wallet's `config.js`).
 
@@ -79,7 +87,7 @@ The casino the wheel talks to must be the one the players' wallets use. It is th
 
 Create your repository with **Use this template**, then change first:
 
-- [wrangler.jsonc](wrangler.jsonc): `name`, `routes` (a domain on your Cloudflare account; without them the game is served at `<name>.<your-subdomain>.workers.dev`) and `GAME`, your game's ID, which the wallet's **Developer** page shows once you publish it.
+- [wrangler.jsonc](wrangler.jsonc): `name`, `routes` (a domain on your Cloudflare account; without them the game is served at `<name>.<your-subdomain>.workers.dev`) and `GAME`, your game's ID, which the wallet's **Developer** page shows under the game once you publish it.
 - `package.json`: the package `name` and `repository`.
 - [src/icon.svg](src/icon.svg): the icon the wallet shows your game by, a square SVG of one symbol that fills the square, with no rounded background of its own: the wallet rounds its corners ([the icon](https://hookedin.com/docs/games/publishing/#the-icon)).
 - A different shared game is a different [src/table.ts](src/table.ts): its equally likely outcomes, in `ORDER`, and what a player's choices are owed on each. A wheel of fortune is one outcome per segment, and the wheel's server stays as it is; so is a crash game whose players all set their cash-out before the round, with outcomes as fine as its crash points need. A game whose players decide while the round runs, such as a crash game with cash-out by hand, cannot be walked in advance: its server keeps the outcome itself and settles every [developer bet](https://hookedin.com/docs/games/developer-bets/) on its word.
@@ -90,16 +98,16 @@ Half of the commission on the wheel's casino bets goes into the game's bank, wit
 ## Deploy
 
 1. Under **Settings → Secrets and variables → Actions**, add the secret `CLOUDFLARE_API_TOKEN` (from Cloudflare's **Edit Cloudflare Workers** template) and the variable `CLOUDFLARE_ACCOUNT_ID`.
-2. Once, make a key for the Worker, name its address as the game's server key on the wallet's **Developer** page, and give the Worker the key: `npx wrangler secret put SERVER_KEY`. The key spends the game's bank on the wheel's casino bets and settlements and nothing else: it cannot move the game, take money out of the bank or touch your balance. The bank needs no money of its own: the wheel covers a spin's bets only while its bank, which holds their stakes, pays the whole walk, and gives any other its stake back, so what its steps pay always pays the winners. The stakes alone back a spin that wins no more on any pocket than about 2.7% of the casino's virtual bankroll, the zero's edge; money in the bank backs bigger ones.
-3. Push to `main`: [Deploy](.github/workflows/deploy.yml) type-checks, tests, builds and publishes the Worker, which keeps its `SERVER_KEY` from one deploy to the next. `@hookedin/play`, which carries the SDK and the casino's protocol, is play's newest `main` at every build; a build on `main` commits the lockfile it tested, and play's release runs this workflow whenever its `main` moves.
+2. Once, give the Worker the game's server key, which the command in [Run it](#run-it) makes and you name on the wallet's **Developer** page: `npx wrangler secret put SERVER_KEY`. The key spends the game's bank on the wheel's casino bets and settlements and nothing else: it cannot move the game, take money out of the bank or touch your balance. The bank needs no money of its own: the wheel covers a spin's bets only while its bank, which holds their stakes, pays the whole walk, and gives any other its stake back, so what its steps pay always pays the winners. The stakes alone back a spin that wins no more on any pocket than about 2.7% of the casino's virtual bankroll, the zero's edge; money in the bank backs bigger ones.
+3. Push to `main`: [Deploy](.github/workflows/deploy.yml) type-checks, tests, builds and deploys the Worker, which keeps its `SERVER_KEY` from one deploy to the next. `@hookedin/play`, which carries the SDK and the casino's protocol, is play's newest `main` at every build; a build on `main` commits the lockfile it tested, and play's release runs this workflow whenever its `main` moves.
 
-`npx wrangler deploy` publishes it by hand; `wrangler.jsonc` builds the page first.
+`npx wrangler deploy` deploys it by hand; `wrangler.jsonc` builds the page first.
 
 The build writes `dist/_headers`, which Cloudflare applies by itself: the page's Content-Security-Policy, which lets the page talk only to its own origin. Do not host the game on the wallet's own origin; the wallet refuses that.
 
 ## Get listed
 
-Publish it yourself: in your wallet, open **Developer** and give the game its name and its URL. It is then at the address its name makes for anyone with a wallet: `Super Roulette` is at `@<your name>/super-roulette`. The library the casino ships with is what `@hookedin` publishes, from [catalog.json](https://github.com/hookedin/play/blob/main/catalog.json) in play; open an issue or a pull request there to be in it.
+Publish it yourself: in your wallet, open **Developer** and give the game its name and its URL; the name you tried it under, with the deployed URL, keeps its ID, bank and server key. It is then at the address its name makes for anyone with a wallet: `Super Roulette` is at `@<your name>/super-roulette`. The library the casino ships with is what `@hookedin` publishes, from [catalog.json](https://github.com/hookedin/play/blob/main/catalog.json) in play; open an issue or a pull request there to be in it.
 
 ## Tests
 

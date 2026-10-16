@@ -1,6 +1,6 @@
 // One Worker is the whole game: dist/ is served as static assets, and server/worker.ts answers /api/ with the
 // wheel, a Durable Object. For a game of your own, change `name`, replace or remove `routes`, and set the vars to
-// your casino and the game's ID, which the wallet's Developer page shows beside the game.
+// your casino and the game's ID, which the wallet's Developer page shows under the game.
 // The game's server key, which you name on that page, is a secret, set once: `npx wrangler secret put SERVER_KEY`.
 {
   "name": "hookedin-roulette-game",

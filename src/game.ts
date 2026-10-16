@@ -50,6 +50,8 @@ const readTable = read.object<TableView>({
     12,
   ),
 });
+/** Why the wheel could not open the table. */
+const readDown = read.object<{ error: string }>({ error: read.text });
 /** A spin the wheel kept, as its JSON shows it: a round and a seed hash for each level of the walk, the bets it covered
  * and the number it reached. */
 const readSpin = read.object<Spin>({
@@ -525,6 +527,13 @@ function connect() {
   connectedAt = performance.now();
   source = new EventSource('./api/live');
   source.onmessage = event => void hear(readTable(JSON.parse(event.data)));
+  // The wheel could not open the table, and says why. The page connects again once the table is stale.
+  source.addEventListener('down', event => {
+    source?.close();
+    if (!saved) message(readDown(JSON.parse((event as MessageEvent).data)).error, true);
+    offline = true;
+    render();
+  });
 }
 setInterval(() => {
   if (performance.now() - Math.max(heard, connectedAt) < STALE_MS) return;
