@@ -73,7 +73,9 @@ npm run dev
 
 `npm run dev` is `wrangler dev`: it builds the page into `dist/` as it starts, and again whenever `src/` changes, and serves page and wheel together at `http://127.0.0.1:8790/`.
 
-Every roulette bet is a developer bet, so trying the game with the real casino takes a published game and real ETH, as [trying it](https://hookedin.com/docs/games/developer-bets/#trying-it) says; [game-crash](https://github.com/hookedin/game-crash)'s `npm run demo` shows a game with a server on simulated funds. Publish the game with `http://127.0.0.1:8790/` from your wallet's **Developer** page, from an account with a balance. The wheel names the game by its ID, shown under the game on that page as **Game ID**, and signs with the game's server key. In the game's folder, this makes the key, saves it in `.dev.vars`, which git ignores, and prints only its address:
+To play it with pretend money, run `npx hookedin-game serve http://127.0.0.1:8790/`: a local wallet at `http://localhost:4185/`, against a stand-in casino the wheel plays against too ([trying it](https://hookedin.com/docs/games/developer-bets/#trying-it)). Put the `CASINO_URL`, `GAME` and `SERVER_KEY` it prints in `.dev.vars`, which git ignores, before `npm run dev` starts.
+
+With the real casino, every roulette bet is a developer bet of real ETH, on a published game. Publish the game with `http://127.0.0.1:8790/` from your wallet's **Developer** page, from an account with a balance. The wheel names the game by its ID, shown under the game on that page as **Game ID**, and signs with the game's server key. In the game's folder, this makes the key, saves it in `.dev.vars`, which git ignores, and prints only its address:
 
 ```sh
 node -e "const w = require('ethers').Wallet.createRandom(); require('fs').appendFileSync('.dev.vars', 'SERVER_KEY=' + w.privateKey + '\n'); console.log(w.address)"
